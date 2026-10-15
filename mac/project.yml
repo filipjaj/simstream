@@ -1,0 +1,116 @@
+name: SimStream
+options:
+  bundleIdPrefix: social.vilja
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    # AXe's FBSimulatorControl frameworks (vendored by scripts/vendor-axe.sh)
+    # plus a stub module for CoreSimulator's private types.
+    FRAMEWORK_SEARCH_PATHS: ["$(inherited)", "$(PROJECT_DIR)/Vendor/Frameworks", "/Library/Developer/PrivateFrameworks"]
+    SWIFT_INCLUDE_PATHS: ["$(inherited)", "$(PROJECT_DIR)/Vendor/Shim"]
+    LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../Frameworks", "/Library/Developer/PrivateFrameworks"]
+targets:
+  SimStream:
+    type: application
+    platform: macOS
+    sources:
+      - path: SimStream
+    dependencies:
+      - target: SimStreamCLI
+        embed: false
+        link: false
+      - framework: Vendor/Frameworks/FBControlCore.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/Frameworks/FBSimulatorControl.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/Frameworks/XCTestBootstrap.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/Frameworks/FBDeviceControl.framework
+        embed: true
+        codeSign: true
+    postBuildScripts:
+      # Ship the headless CLI inside the app so it can copy itself to remote Macs.
+      - name: Bundle simstream CLI
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/simstream"
+          rm -rf "$dest" && mkdir -p "$dest"
+          cp "$BUILT_PRODUCTS_DIR/simstream-cli" "$dest/simstream"
+          cp "$PROJECT_DIR/SimStream/Resources/viewer.html" "$dest/"
+          cp -R "$PROJECT_DIR/Vendor/Frameworks" "$dest/Frameworks"
+    info:
+      path: SimStream/Info.plist
+      properties:
+        CFBundleDisplayName: SimStream
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: social.vilja.simstream
+        PRODUCT_NAME: SimStream
+        ENABLE_APP_SANDBOX: NO
+        GENERATE_INFOPLIST_FILE: NO
+  # Headless CLI for machines reached over SSH. The target isn't called "simstream": its build
+  # folders would collide with SimStream's on a case-insensitive disk. scripts/install.sh packages it with
+  # viewer.html and the frameworks into ~/.local/share/simstream.
+  SimStreamCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: SimStreamCLI
+      - path: SimStream/Engine
+      - path: SimStream/Server
+      - path: SimStream/Share
+      - path: SimStream/Remote
+    dependencies:
+      - framework: Vendor/Frameworks/FBControlCore.framework
+        embed: false
+      - framework: Vendor/Frameworks/FBSimulatorControl.framework
+        embed: false
+      - framework: Vendor/Frameworks/XCTestBootstrap.framework
+        embed: false
+      - framework: Vendor/Frameworks/FBDeviceControl.framework
+        embed: false
+    settings:
+      base:
+        # Renamed to `simstream` when packaged; a build product named "simstream" shadows the
+        # SimStream module on a case-insensitive disk.
+        PRODUCT_NAME: simstream-cli
+        LD_RUNPATH_SEARCH_PATHS: ["@executable_path/Frameworks", "/Library/Developer/PrivateFrameworks"]
+  SimStreamTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: SimStreamTests
+    dependencies:
+      - target: SimStream
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SimStream.app/Contents/MacOS/SimStream"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  SimStream:
+    build:
+      targets:
+        SimStream: all
+        SimStreamTests: [test]
+    test:
+      targets: [SimStreamTests]
+  SimStreamCLI:
+    build:
+      targets:
+        SimStreamCLI: all

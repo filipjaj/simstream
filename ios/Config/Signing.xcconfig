@@ -1,0 +1,6 @@
+// Defaults for anyone building from source. Put your own values in Local.xcconfig
+// (untracked; copy Local.xcconfig.example) to install the viewer on a device.
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = social.vilja
+
+#include? "Local.xcconfig"

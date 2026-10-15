@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
+<title>Simulator</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b0d;
+    --glass: rgba(38, 38, 42, .72);
+    --glass-border: rgba(255, 255, 255, .08);
+    --fg: #f5f5f7;
+    --fg-2: rgba(235, 235, 245, .6);
+    --fg-3: rgba(235, 235, 245, .3);
+    --fill: rgba(120, 120, 128, .24);
+    --fill-hover: rgba(120, 120, 128, .36);
+    --red: #ff453a;
+    --green: #30d158;
+    --yellow: #ffd60a;
+    --blue: #0a84ff;
+    --radius: 14px;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden; overscroll-behavior: none;
+    font: 13px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  body { display: grid; grid-template-rows: auto 1fr auto; height: 100dvh;
+    background: radial-gradient(120% 80% at 50% 0%, #1c1c22 0%, var(--bg) 60%); }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* Status bar */
+  header { display: flex; align-items: center; gap: 12px; padding: calc(10px + var(--safe-t)) 16px 10px; }
+  .device { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 10px 6px 8px; margin-left: -8px; border-radius: 10px; text-align: left; }
+  .device.switchable:hover { background: var(--fill); }
+  .device .glyph { width: 30px; height: 30px; border-radius: 8px; background: var(--fill); display: grid; place-items: center; }
+  .device .names { min-width: 0; }
+  .device .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .device .runtime { color: var(--fg-2); font-size: 12px; }
+  .device .chev { display: none; color: var(--fg-2); width: 14px; height: 14px; }
+  .device.switchable .chev { display: block; }
+  .spacer { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--fill);
+    font-variant-numeric: tabular-nums; color: var(--fg-2); white-space: nowrap; }
+  .live { background: var(--red); color: #fff; font-weight: 700; font-size: 11px; letter-spacing: .06em; padding: 0 8px; }
+  .live::before { content: ""; width: 6px; height: 6px; border-radius: 3px; background: #fff; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #timer.low { color: var(--red); }
+  .bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+  .bars i { width: 3px; border-radius: 1px; background: var(--fg-3); }
+  .bars i:nth-child(1) { height: 5px; } .bars i:nth-child(2) { height: 8px; } .bars i:nth-child(3) { height: 12px; }
+  .bars.good i { background: var(--green); }
+  .bars.ok i:nth-child(-n+2) { background: var(--yellow); }
+  .bars.poor i:nth-child(1) { background: var(--red); }
+  .viewonly { display: none; }
+  body.viewonly .viewonly { display: inline-flex; }
+
+  /* Screen */
+  #stage { position: relative; min-height: 0; display: grid; place-items: center; padding: 8px 16px; }
+  #frame { position: relative; background: #000; overflow: hidden; box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 30px 80px rgba(0,0,0,.6);
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: default; }
+  body.control #frame { cursor: pointer; }
+  #screen { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity .25s; }
+  #screen.ready { opacity: 1; }
+  #touch { position: absolute; width: 38px; height: 38px; margin: -19px 0 0 -19px; border-radius: 50%; pointer-events: none;
+    background: rgba(255,255,255,.28); box-shadow: 0 0 0 1.5px rgba(255,255,255,.7), 0 2px 10px rgba(0,0,0,.35);
+    transform: scale(.6); opacity: 0; transition: transform .12s, opacity .18s; }
+  #touch.on { transform: scale(1); opacity: 1; }
+  #overlay { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; background: rgba(0,0,0,.55);
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); transition: opacity .25s; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h1 { font-size: 17px; font-weight: 600; margin: 14px 0 4px; }
+  #overlay p { margin: 0; color: var(--fg-2); max-width: 26ch; }
+  .spinner { width: 26px; height: 26px; border-radius: 50%; border: 2.5px solid var(--fg-3); border-top-color: var(--fg); animation: spin .8s linear infinite; margin: auto; }
+  @keyframes spin { to { transform: rotate(1turn); } }
+  #overlay .icon svg { width: 34px; height: 34px; color: var(--fg-2); }
+
+  /* Controls */
+  nav { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 16px calc(14px + var(--safe-b)); }
+  #controlBar { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 4px 4px 4px 12px; border-radius: 18px; max-width: 100%;
+    background: var(--glass); border: 1px solid var(--glass-border); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
+  #controlBar[hidden] { display: none; }
+  #controlBar .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--fg-3); flex: none; }
+  #controlBar.mine .dot { background: var(--green); box-shadow: 0 0 0 3px rgba(48,209,88,.25); }
+  #controlBar.queued .dot { background: var(--yellow); }
+  #controlBar.other .dot { background: var(--blue); }
+  #controlText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  #controlText .sub { color: var(--fg-2); }
+  #controlAction { height: 28px; padding: 0 12px; border-radius: 14px; background: var(--blue); color: #fff; font-weight: 600; white-space: nowrap; }
+  #controlAction.secondary { background: var(--fill); color: var(--fg); }
+  #controlAction:active { transform: scale(.97); }
+  .toolbar { display: flex; align-items: center; gap: 2px; padding: 5px; border-radius: 18px; background: var(--glass);
+    border: 1px solid var(--glass-border); -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px);
+    box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .toolbar button { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 12px; border-radius: 13px; color: var(--fg); }
+  .toolbar button:hover { background: var(--fill); }
+  .toolbar button:active { background: var(--fill-hover); transform: scale(.97); }
+  .toolbar button[aria-pressed="true"] { background: var(--fill-hover); }
+  .toolbar button:disabled { opacity: .35; pointer-events: none; }
+  .toolbar .sep { width: 1px; height: 22px; background: var(--glass-border); margin: 0 4px; }
+  @media (max-width: 560px) {
+    .toolbar button .label { display: none; }
+    .toolbar button { padding: 0 11px; }
+    #viewers .label, #latency { display: none; }
+    header { gap: 8px; }
+  }
+  @media (hover: none) { #fullscreen { display: none; } }
+
+  /* Simulator picker */
+  #picker { margin: 0; inset: auto; position: fixed; top: calc(56px + var(--safe-t)); left: 12px; width: min(320px, calc(100vw - 24px));
+    padding: 6px; border-radius: var(--radius); border: 1px solid var(--glass-border); color: var(--fg);
+    background: rgba(44, 44, 48, .9); -webkit-backdrop-filter: blur(30px); backdrop-filter: blur(30px); box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+  #picker .title { padding: 8px 10px 6px; color: var(--fg-2); font-size: 12px; font-weight: 600; }
+  #picker button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 9px; text-align: left; }
+  #picker button:hover, #picker button:focus-visible { background: var(--blue); outline: none; }
+  #picker button:hover .sub, #picker button:focus-visible .sub { color: rgba(255,255,255,.8); }
+  #picker .sub { color: var(--fg-2); font-size: 12px; }
+  #picker .check { margin-left: auto; visibility: hidden; }
+  #picker button[aria-current="true"] .check { visibility: visible; }
+
+  #kbd { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; font-size: 16px; }
+  .toast { position: fixed; left: 50%; bottom: calc(80px + var(--safe-b)); transform: translate(-50%, 8px); padding: 8px 14px; border-radius: 12px;
+    background: var(--glass); border: 1px solid var(--glass-border); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+    opacity: 0; transition: .2s; pointer-events: none; white-space: nowrap; }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-iphone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 5h3"/></symbol>
+  <symbol id="i-ipad" viewBox="0 0 24 24"><rect x="4" y="2.5" width="16" height="19" rx="2.2"/><path d="M11 18.5h2"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.8" cy="9" r="2.4"/><path d="M15.5 14.2c2.5-.3 4.5 1.3 5 4.3"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5H15V15h-6v5.5H5.5A1.5 1.5 0 0 1 4 19z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.2"/><path d="M6 9.5h.01M9.3 9.5h.01M12.6 9.5h.01M15.9 9.5h.01M18 9.5h.01M6 12.5h.01M18 12.5h.01M8.5 15h7"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.5-2h5.4l1.5 2h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.8" r="3.3"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14.5 4.5h5v5M9.5 19.5h-5v-5M19.5 4.5l-6 6M4.5 19.5l6-6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M3 3l18 18M8.5 16a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4-2.3M19 12.5a10 10 0 0 0-3.3-2M2 9a15 15 0 0 1 4.5-2.8M22 9A15 15 0 0 0 11 5.1"/><circle cx="12" cy="19.5" r=".5"/></symbol>
+</svg>
+
+<header>
+  <button class="device" id="deviceButton" popovertarget="picker" aria-haspopup="menu" disabled>
+    <span class="glyph"><svg><use href="#i-iphone" id="deviceGlyph"/></svg></span>
+    <span class="names"><div class="name" id="deviceName">Simulator</div><div class="runtime" id="deviceRuntime">Connecting…</div></span>
+    <svg class="chev"><use href="#i-chev"/></svg>
+  </button>
+  <span class="spacer"></span>
+  <span class="pill viewonly" title="The host turned off remote control"><svg style="width:15px;height:15px"><use href="#i-eye"/></svg>View only</span>
+  <span class="pill live" aria-label="Live">LIVE</span>
+  <span class="pill" id="timer" title="Time until this link expires">15:00</span>
+  <span class="pill" id="viewers" title="People watching"><svg style="width:16px;height:16px"><use href="#i-person"/></svg><span id="viewerCount">1</span></span>
+  <span class="pill" id="signal" title="Round-trip latency"><span class="bars" id="bars"><i></i><i></i><i></i></span><span id="latency">–</span></span>
+</header>
+
+<main id="stage">
+  <div id="frame" tabindex="0" aria-label="Simulator screen. Click to tap, drag to swipe, scroll to scroll, type to send keys.">
+    <canvas id="screen"></canvas>
+    <div id="touch"></div>
+    <div id="overlay" role="status" aria-live="polite"><div id="overlayBody"><div class="spinner"></div><h1>Connecting</h1><p>Opening the stream…</p></div></div>
+  </div>
+</main>
+
+<nav>
+  <div id="controlBar" role="status" aria-live="polite" hidden>
+    <span class="dot" aria-hidden="true"></span>
+    <span id="controlText"></span>
+    <button id="controlAction"></button>
+  </div>
+  <div class="toolbar" role="toolbar" aria-label="Simulator controls">
+    <button data-button="home" title="Home (⌘⇧H)" aria-label="Home"><svg><use href="#i-home"/></svg><span class="label">Home</span></button>
+    <button data-button="lock" title="Lock" aria-label="Lock"><svg><use href="#i-lock"/></svg><span class="label">Lock</span></button>
+    <button id="keyboardButton" title="Keyboard" aria-label="Keyboard" aria-pressed="false"><svg><use href="#i-keyboard"/></svg><span class="label">Keyboard</span></button>
+    <span class="sep"></span>
+    <button id="screenshot" title="Save screenshot" aria-label="Save screenshot"><svg><use href="#i-camera"/></svg></button>
+    <button id="fullscreen" title="Full screen" aria-label="Full screen"><svg><use href="#i-expand"/></svg></button>
+  </div>
+</nav>
+
+<div id="picker" popover role="menu" aria-label="Switch simulator"><div class="title">Switch Simulator</div><div id="choices"></div></div>
+<textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Type into the simulator"></textarea>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const frameEl = $("frame"), canvas = $("screen"), overlay = $("overlay"), touchEl = $("touch"), kbd = $("kbd");
+const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+
+let ws = null, state = null, expired = false, retry = 0, gotFrame = false;
+let decoder = null, needKey = true, h264 = false;
+let me = null, control = null, wasHolder = false, wasQueued = false;
+
+const send = (msg) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); };
+const ack = () => send({ type: "ack" });
+
+// ---------- Overlay states ----------
+function showOverlay(kind) {
+  const body = $("overlayBody");
+  const views = {
+    connecting: `<div class="spinner"></div><h1>Connecting</h1><p>Opening the stream…</p>`,
+    reconnecting: `<div class="spinner"></div><h1>Reconnecting</h1><p>The connection dropped. Trying again…</p>`,
+    expired: `<div class="icon"><svg><use href="#i-clock"/></svg></div><h1>This link has expired</h1><p>Ask the person who shared it for a new link.</p>`,
+    offline: `<div class="icon"><svg><use href="#i-wifi-off"/></svg></div><h1>Can't reach the simulator</h1><p>The host may have stopped sharing.</p>`,
+  };
+  body.innerHTML = views[kind];
+  overlay.classList.remove("hidden");
+}
+const hideOverlay = () => overlay.classList.add("hidden");
+
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("on");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("on"), 1800);
+}
+
+// ---------- Layout ----------
+function layout() {
+  const aspect = state ? state.device.width / state.device.height : (canvas.width && canvas.height ? canvas.width / canvas.height : 9 / 19.5);
+  const stage = $("stage").getBoundingClientRect();
+  const maxW = stage.width - 32, maxH = stage.height - 16;
+  let w = maxW, h = w / aspect;
+  if (h > maxH) { h = maxH; w = h * aspect; }
+  frameEl.style.width = `${Math.floor(w)}px`;
+  frameEl.style.height = `${Math.floor(h)}px`;
+  frameEl.style.borderRadius = `${w * (state ? state.device.cornerRatio : 0.13)}px`;
+}
+new ResizeObserver(layout).observe($("stage"));
+
+// ---------- State ----------
+function applyState(next) {
+  const switched = state && state.device.udid !== next.device.udid;
+  state = next;
+  $("deviceName").textContent = next.device.name;
+  $("deviceRuntime").textContent = next.device.runtime;
+  $("deviceGlyph").setAttribute("href", next.device.symbol === "ipad" ? "#i-ipad" : "#i-iphone");
+  document.title = `${next.device.name} · Live`;
+  $("viewerCount").textContent = next.viewers;
+  $("viewers").title = next.viewers === 1 ? "1 person watching" : `${next.viewers} people watching`;
+  document.body.classList.toggle("viewonly", !next.controlEnabled);
+  renderControl();
+
+  const button = $("deviceButton");
+  const switchable = next.choices.length > 1;
+  button.classList.toggle("switchable", switchable);
+  button.disabled = !switchable;
+  $("choices").replaceChildren(...next.choices.map((c) => {
+    const item = document.createElement("button");
+    item.setAttribute("role", "menuitemradio");
+    item.setAttribute("aria-current", String(c.udid === next.device.udid));
+    item.innerHTML = `<svg><use href="#i-${c.symbol === "ipad" ? "ipad" : "iphone"}"/></svg><span><div></div><div class="sub"></div></span><svg class="check"><use href="#i-check"/></svg>`;
+    item.querySelector("div").textContent = c.name;
+    item.querySelector(".sub").textContent = c.runtime;
+    item.addEventListener("click", () => { $("picker").hidePopover(); if (c.udid !== next.device.udid) send({ type: "select", udid: c.udid }); });
+    return item;
+  }));
+  if (switched) { gotFrame = false; canvas.classList.remove("ready"); showOverlay("connecting"); }
+  layout();
+  tickTimer();
+}
+
+function tickTimer() {
+  if (!state || expired) return;
+  const left = Math.max(0, Math.round((state.expiresAt - Date.now()) / 1000));
+  $("timer").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+  $("timer").classList.toggle("low", left < 60);
+}
+setInterval(tickTimer, 1000);
+
+// ---------- Control queue ----------
+function formatLeft(ms) {
+  const left = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+}
+
+function renderControl() {
+  const bar = $("controlBar"), text = $("controlText"), action = $("controlAction");
+  const enabled = !!(state && state.controlEnabled && !expired);
+  bar.hidden = !enabled || !control;
+  document.body.classList.toggle("control", !!controlOn());
+  document.querySelectorAll(".toolbar [data-button], #keyboardButton").forEach((b) => (b.disabled = !controlOn()));
+  if (bar.hidden) return;
+
+  const holder = control.holder;
+  const position = control.waiting.findIndex((p) => p.id === me) + 1;
+  const waiting = control.waiting.length;
+  const turnLeft = control.turnEndsAt ? formatLeft(control.turnEndsAt - Date.now()) : null;
+  const sub = (t) => `<span class="sub">${t}</span>`;
+  bar.className = "";
+  action.className = "";
+
+  if (isHolder()) {
+    bar.classList.add("mine");
+    text.innerHTML = waiting ? `You're in control ${sub(`· ${turnLeft} left · ${waiting} waiting`)}` : "You're in control";
+    action.textContent = "Release";
+    action.classList.add("secondary");
+    action.onclick = () => send({ type: "release" });
+  } else if (position) {
+    bar.classList.add("queued");
+    const eta = position === 1 && turnLeft ? sub(`· your turn in ${turnLeft} or less`) : sub(`· ${holder ? escapeHTML(holder.name) : "someone"} is in control`);
+    text.innerHTML = `You're #${position} in line ${eta}`;
+    action.textContent = "Leave Line";
+    action.classList.add("secondary");
+    action.onclick = () => send({ type: "release" });
+  } else if (holder) {
+    bar.classList.add("other");
+    text.innerHTML = `${escapeHTML(holder.name)} is in control${waiting ? sub(` · ${waiting} waiting`) : ""}`;
+    action.textContent = "Request Control";
+    action.onclick = () => send({ type: "request" });
+  } else {
+    text.innerHTML = `Nobody is in control ${sub("· tap the screen to take it")}`;
+    action.textContent = "Take Control";
+    action.onclick = () => send({ type: "request" });
+  }
+
+  const holderNow = isHolder();
+  if (holderNow && !wasHolder && wasQueued) toast("It's your turn");
+  if (!holderNow && wasHolder && control.holder) toast("Your turn ended");
+  wasHolder = holderNow;
+  wasQueued = position > 0;
+}
+const escapeHTML = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+setInterval(() => { if (control && control.turnEndsAt) renderControl(); }, 1000);
+
+// ---------- Video ----------
+function draw(source, width, height) {
+  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; layout(); }
+  ctx.drawImage(source, 0, 0, width, height);
+  if (!gotFrame) { gotFrame = true; canvas.classList.add("ready"); hideOverlay(); }
+}
+
+function base64Bytes(text) { return Uint8Array.from(atob(text), (c) => c.charCodeAt(0)); }
+
+function configureDecoder(config) {
+  if (decoder && decoder.state !== "closed") decoder.close();
+  decoder = new VideoDecoder({
+    output: (frame) => { draw(frame, frame.displayWidth, frame.displayHeight); frame.close(); ack(); },
+    error: () => { needKey = true; send({ type: "keyframe" }); decoder = null; },
+  });
+  decoder.configure({ codec: config.codec, description: base64Bytes(config.description), optimizeForLatency: true });
+  needKey = true;
+}
+
+let jpegBusy = false, jpegNext = null;
+function decodeJPEG(bytes) {
+  if (jpegBusy) { if (jpegNext) ack(); jpegNext = bytes; return; }
+  jpegBusy = true;
+  createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
+    .then((bitmap) => { draw(bitmap, bitmap.width, bitmap.height); bitmap.close(); })
+    .catch(() => {})
+    .finally(() => {
+      ack();
+      jpegBusy = false;
+      if (jpegNext) { const next = jpegNext; jpegNext = null; decodeJPEG(next); }
+    });
+}
+
+function onBinary(buffer) {
+  const kind = new Uint8Array(buffer, 0, 1)[0];
+  if (kind === 1) return decodeJPEG(new Uint8Array(buffer, 1));
+  const key = kind === 3;
+  if (!decoder || decoder.state !== "configured" || (needKey && !key)) { ack(); return; }
+  if (decoder.decodeQueueSize > 4 && !key) { ack(); return; } // decoder is behind; skip until it catches up
+  needKey = false;
+  const timestamp = Number(new DataView(buffer).getBigInt64(1));
+  try {
+    decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp, data: new Uint8Array(buffer, 9) }));
+  } catch { ack(); needKey = true; send({ type: "keyframe" }); }
+}
+
+function onText(message) {
+  switch (message.type) {
+    case "state": return applyState(message);
+    case "codec": return configureDecoder(message);
+    case "pong": return showLatency(performance.now() - message.t);
+    case "welcome": me = message.id; return renderControl();
+    case "control": control = message; return renderControl();
+    case "denied": return explainDenied();
+    case "expired":
+      expired = true;
+      $("timer").textContent = "0:00";
+      showOverlay("expired");
+      ws.close();
+      return;
+  }
+}
+
+// ---------- Connection ----------
+async function supportsH264() {
+  if (!("VideoDecoder" in window)) return false;
+  try { return (await VideoDecoder.isConfigSupported({ codec: "avc1.640028", optimizeForLatency: true })).supported === true; }
+  catch { return false; }
+}
+
+function connect() {
+  const url = new URL(location.pathname.replace(/\/?$/, "/") + "ws", location.href);
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { retry = 0; needKey = true; send({ type: "hello", h264 }); };
+  ws.onmessage = (e) => (typeof e.data === "string" ? onText(JSON.parse(e.data)) : onBinary(e.data));
+  ws.onclose = () => {
+    if (expired) return;
+    gotFrame = false;
+    showOverlay(retry > 4 ? "offline" : "reconnecting");
+    setTimeout(connect, Math.min(500 * 2 ** retry++, 5000));
+  };
+}
+
+function showLatency(ms) {
+  const bars = $("bars");
+  bars.className = "bars " + (ms < 90 ? "good" : ms < 220 ? "ok" : "poor");
+  $("latency").textContent = `${Math.round(ms)} ms`;
+  $("signal").title = `Round-trip latency ${Math.round(ms)} ms · ${h264 ? "H.264" : "JPEG"}`;
+}
+setInterval(() => send({ type: "ping", t: performance.now() }), 2000);
+
+// ---------- Touch ----------
+const isHolder = () => !!(control && control.holder && control.holder.id === me);
+// Free control is claimed by the first touch; otherwise only the holder drives.
+const controlOn = () => state && state.controlEnabled && !expired && (!control || !control.holder || isHolder());
+
+function explainDenied() {
+  if (!state || !state.controlEnabled) return toast("The host has turned off remote control");
+  const holder = control && control.holder ? control.holder.name : "Someone";
+  toast(`${holder} is in control. Request control to take a turn.`);
+}
+function point(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1), y: Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1) };
+}
+function moveTouchIndicator(e, on) {
+  const r = frameEl.getBoundingClientRect();
+  touchEl.style.left = `${e.clientX - r.left}px`;
+  touchEl.style.top = `${e.clientY - r.top}px`;
+  touchEl.classList.toggle("on", on);
+}
+
+let pointerId = null, pendingMove = null, moveScheduled = false;
+const sendTouch = (phase, p) => send({ type: "touch", phase, x: p.x, y: p.y });
+const multitouch = () => !!(state && state.multitouch);
+function flushMove() {
+  moveScheduled = false;
+  if (pendingMove) { pendingMove.points ? send({ type: "touches", phase: "move", points: pendingMove.points }) : sendTouch("move", pendingMove); pendingMove = null; }
+}
+const scheduleMove = (move) => { pendingMove = move; if (!moveScheduled) { moveScheduled = true; requestAnimationFrame(flushMove); } };
+
+// Touch screens: up to two fingers. A second finger turns a one-finger drag into a
+// two-finger gesture (pinch, rotate, scroll); lifting either finger ends it.
+const fingers = new Map(); // pointerId -> {id, x, y}
+let gesture = null; // "one" | "two" | "done"
+const fingerPoints = () => [...fingers.values()].slice(0, 2).map((f) => ({ id: f.id, x: f.x, y: f.y }));
+
+frameEl.addEventListener("pointerdown", (e) => {
+  frameEl.focus({ preventScroll: true });
+  if (!controlOn()) { if (state && !expired) explainDenied(); return; }
+  if (e.button > 0) return;
+  e.preventDefault();
+  frameEl.setPointerCapture(e.pointerId);
+  if (e.pointerType === "touch" && multitouch()) {
+    if (fingers.size >= 2 || gesture === "done") return;
+    fingers.set(e.pointerId, { id: fingers.size, ...point(e) });
+    if (fingers.size === 1) { gesture = "one"; sendTouch("down", point(e)); }
+    else { flushMove(); const [a] = fingerPoints(); sendTouch("up", a); gesture = "two"; send({ type: "touches", phase: "down", points: fingerPoints() }); }
+    moveTouchIndicator(e, true);
+    return;
+  }
+  if (pointerId !== null) return;
+  pointerId = e.pointerId;
+  sendTouch("down", point(e));
+  moveTouchIndicator(e, true);
+});
+frameEl.addEventListener("pointermove", (e) => {
+  if (fingers.has(e.pointerId)) {
+    Object.assign(fingers.get(e.pointerId), point(e));
+    if (gesture === "one") scheduleMove(point(e));
+    else if (gesture === "two") scheduleMove({ points: fingerPoints() });
+    moveTouchIndicator(e, true);
+    return;
+  }
+  if (e.pointerId !== pointerId) return;
+  moveTouchIndicator(e, true);
+  scheduleMove(point(e)); // one move per display frame; the latest position wins
+});
+const endTouch = (e) => {
+  if (fingers.has(e.pointerId)) {
+    Object.assign(fingers.get(e.pointerId), point(e));
+    pendingMove = null;
+    if (gesture === "one") sendTouch("up", point(e));
+    else if (gesture === "two") send({ type: "touches", phase: "up", points: fingerPoints() });
+    fingers.delete(e.pointerId);
+    gesture = fingers.size ? "done" : null;
+    if (!fingers.size) moveTouchIndicator(e, false);
+    return;
+  }
+  if (e.pointerId !== pointerId) return;
+  pendingMove = null;
+  sendTouch("up", point(e));
+  moveTouchIndicator(e, false);
+  pointerId = null;
+};
+frameEl.addEventListener("pointerup", endTouch);
+frameEl.addEventListener("pointercancel", endTouch);
+
+// Trackpad pinch: two fingers either side of the cursor, spread by the zoom factor.
+let pinch = null, pinchTimer = 0;
+function pinchTo(e, scale) {
+  if (!pinch) {
+    pinch = { center: point(e), spread: 0.08 };
+    send({ type: "touches", phase: "down", points: pinchPoints() });
+  }
+  pinch.spread = Math.min(Math.max(0.08 * scale, 0.02), 0.45);
+  scheduleMove({ points: pinchPoints() });
+  clearTimeout(pinchTimer);
+  pinchTimer = setTimeout(endPinch, 160);
+}
+function pinchPoints() {
+  const { center, spread } = pinch;
+  const clamp = (v) => Math.min(Math.max(v, 0), 1);
+  return [{ id: 0, x: clamp(center.x - spread), y: center.y }, { id: 1, x: clamp(center.x + spread), y: center.y }];
+}
+function endPinch() { if (!pinch) return; flushMove(); send({ type: "touches", phase: "up", points: pinchPoints() }); pinch = null; }
+let safariScale = 1;
+frameEl.addEventListener("gesturestart", (e) => { if (controlOn() && multitouch()) { e.preventDefault(); safariScale = 1; } });
+frameEl.addEventListener("gesturechange", (e) => { if (controlOn() && multitouch()) { e.preventDefault(); pinchTo(e, e.scale); } });
+frameEl.addEventListener("gestureend", (e) => { e.preventDefault(); endPinch(); });
+
+// Trackpad and wheel scrolling become a finger drag; ctrl+wheel (Chrome's pinch) becomes a pinch.
+let wheel = null, wheelTimer = 0, wheelScale = 1;
+frameEl.addEventListener("wheel", (e) => {
+  if (!controlOn() || pointerId !== null || fingers.size) return;
+  e.preventDefault();
+  if (e.ctrlKey && multitouch()) {
+    if (!pinch) wheelScale = 1;
+    wheelScale *= Math.exp(-e.deltaY / 100);
+    return pinchTo(e, wheelScale);
+  }
+  const r = canvas.getBoundingClientRect();
+  if (!wheel) { wheel = point(e); sendTouch("down", wheel); }
+  wheel = { x: Math.min(Math.max(wheel.x - e.deltaX / r.width, 0), 1), y: Math.min(Math.max(wheel.y - e.deltaY / r.height, 0), 1) };
+  scheduleMove(wheel);
+  clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => { flushMove(); sendTouch("up", wheel); wheel = null; }, 140);
+}, { passive: false });
+
+// ---------- Keyboard ----------
+const keyCodes = { Enter: 40, Escape: 41, Backspace: 42, Tab: 43, Delete: 76, ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82 };
+document.addEventListener("keydown", (e) => {
+  if (!controlOn() || e.target === kbd || $("picker").matches(":popover-open")) return;
+  if (e.metaKey || e.ctrlKey) {
+    if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "h") { e.preventDefault(); send({ type: "button", name: "home" }); }
+    return;
+  }
+  if (document.activeElement !== frameEl && document.activeElement !== document.body) return;
+  if (keyCodes[e.key]) { e.preventDefault(); send({ type: "key", code: keyCodes[e.key] }); }
+  else if (e.key.length === 1) { e.preventDefault(); send({ type: "text", text: e.key }); }
+});
+document.addEventListener("paste", (e) => {
+  if (!controlOn() || e.target === kbd) return;
+  const text = e.clipboardData && e.clipboardData.getData("text");
+  if (text) { e.preventDefault(); send({ type: "text", text }); toast("Pasted into the simulator"); }
+});
+
+// On-screen keyboards: a hidden textarea holding one sentinel character. Anything
+// added is typed; dropping below the sentinel means backspace.
+const SENTINEL = "​";
+const resetKbd = () => { kbd.value = SENTINEL; kbd.setSelectionRange(1, 1); };
+kbd.addEventListener("input", () => {
+  const value = kbd.value;
+  if (!value.startsWith(SENTINEL)) send({ type: "key", code: 42 });
+  else {
+    const typed = value.slice(SENTINEL.length);
+    if (typed.includes("\n")) { typed.split("\n").forEach((part, i) => { if (i) send({ type: "key", code: 40 }); if (part) send({ type: "text", text: part }); }); }
+    else if (typed) send({ type: "text", text: typed });
+  }
+  resetKbd();
+});
+kbd.addEventListener("blur", () => $("keyboardButton").setAttribute("aria-pressed", "false"));
+$("keyboardButton").addEventListener("click", () => {
+  if (matchMedia("(hover: none)").matches) {
+    resetKbd();
+    kbd.focus();
+    $("keyboardButton").setAttribute("aria-pressed", "true");
+  } else {
+    frameEl.focus();
+    toast("Type to send keys to the simulator");
+  }
+});
+
+// ---------- Buttons ----------
+document.querySelectorAll("[data-button]").forEach((b) => b.addEventListener("click", () => send({ type: "button", name: b.dataset.button })));
+$("screenshot").addEventListener("click", () => {
+  if (!gotFrame) return;
+  canvas.toBlob((blob) => {
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace("T", " at ").replaceAll(":", ".");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${state ? state.device.name : "Simulator"} ${stamp}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast("Screenshot saved");
+  }, "image/png");
+});
+$("fullscreen").addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.();
+});
+if (!document.documentElement.requestFullscreen) $("fullscreen").hidden = true;
+
+supportsH264().then((ok) => { h264 = ok; connect(); });
+layout();
+</script>
+</body>
+</html>
