@@ -118,8 +118,10 @@ func printState(_ state: ShareState, json: Bool) {
   case .starting: print("Starting: \(state.step ?? "…")")
   case .live:
     print("Sharing \(state.deviceName ?? "?") (\(state.runtime ?? "")) \(state.udid ?? "")")
-    if let url = state.url { print("Public: \(url)") }
-    if state.url != nil, state.allowControl { warnAboutControl() }
+    // Without a tunnel the share's URL is the local one.
+    let isPublic = state.url != nil && state.url != state.localURL
+    if let url = state.url { print("\(isPublic ? "Public" : "Local"): \(url)") }
+    if isPublic, state.allowControl { warnAboutControl() }
     if let expires = state.expiresAt {
       print("Expires: \(Date(timeIntervalSince1970: expires / 1000).formatted(date: .omitted, time: .standard))")
     }

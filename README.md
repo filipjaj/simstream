@@ -2,9 +2,22 @@
 
 Share a running iOS simulator at a public link. Viewers watch a low-latency H.264 stream in the browser or the native iOS viewer, and can take turns controlling it.
 
+![The SimStream Mac app sharing an iPhone simulator: the live screen on the left, and the link, QR code, expiry and control queue on the right](docs/media/mac-app.png)
+
 - **Mac app** (`mac/`): pick a simulator, share it, get a link and a QR code. Shares can also run on another Mac over SSH, so the link outlives your laptop's lid.
 - **CLI** (`simstream`): the same engine, headless, for Macs you reach over SSH.
 - **iOS viewer** (`ios/`): scan the QR code and use the simulator with real multi-touch.
+
+<table>
+<tr>
+<td width="62%"><img src="docs/media/browser-viewer.png" alt="The browser viewer: the simulator's screen with a live badge, expiry timer, viewer count and latency"></td>
+<td><img src="docs/media/ios-viewer.gif" alt="The iOS viewer on an iPad, browsing the shared simulator's Photos library by touch"></td>
+</tr>
+<tr>
+<td>Anyone with the link opens it in a browser.</td>
+<td>The iOS viewer, with real multi-touch (<a href="docs/media/ios-viewer.mp4">MP4</a>).</td>
+</tr>
+</table>
 
 Read [SECURITY.md](SECURITY.md) before sharing with control on. A link is full access to that simulator, and the simulator can reach your Mac's network.
 
