@@ -265,18 +265,28 @@ private struct AppLockPicker: View {
   @State private var apps: [LockedApp] = []
 
   var body: some View {
-    @Bindable var session = session
-    Picker("Keep viewers in", selection: $session.lockedApp) {
+    Picker("Keep viewers in", selection: selection) {
       Text("Any App").tag(LockedApp?.none)
       if !apps.isEmpty { Divider() }
       ForEach(apps) { Text($0.name).tag(Optional($0)) }
       // A lock set elsewhere (CLI, another simulator) stays selectable.
-      if let locked = session.lockedApp, !apps.contains(locked) {
+      if let locked = selection.wrappedValue, !apps.contains(locked) {
         Text(locked.name).tag(Optional(locked))
       }
     }
     .disabled(device?.isBooted != true)
     .task(id: device?.id) { await load() }
+  }
+
+  /// The live share's lock while this simulator is shared, otherwise the one its next link starts with.
+  private var selection: Binding<LockedApp?> {
+    let sharing = session.isActive && session.device?.id == device?.id
+    return Binding {
+      sharing ? session.lockedApp : device.flatMap { model.lockMemory.app(for: $0.udid) }
+    } set: { app in
+      if let device { model.lockMemory.remember(app, for: device.udid) }
+      if sharing { session.lockedApp = app }
+    }
   }
 
   private func load() async {

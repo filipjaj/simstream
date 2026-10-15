@@ -65,3 +65,21 @@ struct InstalledAppsTests {
     ])
   }
 }
+
+@MainActor
+struct LockMemoryTests {
+  @Test func remembersTheLastLockPerSimulatorAcrossLaunches() throws {
+    let suite = "LockMemoryTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let kupp = LockedApp(bundleID: "com.example.kupp", name: "Kupp")
+
+    LockMemory(defaults: defaults).remember(kupp, for: "A")
+    let reopened = LockMemory(defaults: defaults)
+    #expect(reopened.app(for: "A") == kupp)
+    #expect(reopened.app(for: "B") == nil)
+
+    reopened.remember(nil, for: "A")
+    #expect(LockMemory(defaults: defaults).app(for: "A") == nil)
+  }
+}

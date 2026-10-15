@@ -45,6 +45,7 @@ final class AppModel {
 
   let catalog = SimulatorCatalog()
   let remotes = RemoteCatalog()
+  let lockMemory = LockMemory()
   let pool = LinkPool()
   let session: ShareSession
   var selection: String?
@@ -82,6 +83,7 @@ final class AppModel {
   }
 
   func createLink(for device: SimulatorDevice) {
+    session.lockedApp = lockMemory.app(for: device.udid)
     if device.isRemote, let host = remotes.host(for: device) {
       session.startRemote(device, on: host)
     } else if session.isActive, session.remoteHost == nil, session.device?.id != device.id {

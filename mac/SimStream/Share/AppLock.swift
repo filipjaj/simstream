@@ -13,6 +13,28 @@ struct LockedApp: Codable, Hashable, Sendable, Identifiable {
   }
 }
 
+/// The app each simulator was last locked to, so a new link starts locked the same way.
+/// Choosing "Any App" forgets it.
+@MainActor @Observable
+final class LockMemory {
+  private static let key = "lockedApps"
+  private let defaults: UserDefaults
+  private var apps: [String: LockedApp]
+
+  init(defaults: UserDefaults = .standard) {
+    self.defaults = defaults
+    apps = defaults.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([String: LockedApp].self, from: $0) } ?? [:]
+  }
+
+  func app(for udid: String) -> LockedApp? { apps[udid] }
+
+  func remember(_ app: LockedApp?, for udid: String) {
+    guard apps[udid] != app else { return }
+    apps[udid] = app
+    if let data = try? JSONEncoder().encode(apps) { defaults.set(data, forKey: Self.key) }
+  }
+}
+
 /// User-installed apps on a simulator, from `simctl listapps`.
 enum InstalledApps {
   static func list(udid: String) async -> [LockedApp] {

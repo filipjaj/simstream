@@ -107,7 +107,7 @@ final class RemoteCatalog {
       while !Task.isCancelled {
         guard let self else { return }
         await withTaskGroup(of: Void.self) { group in
-          for host in hosts { group.addTask { await self.refresh(host) } }
+          for host in self.hosts { group.addTask { await self.refresh(host) } }
         }
         try? await Task.sleep(for: .seconds(10))
       }
