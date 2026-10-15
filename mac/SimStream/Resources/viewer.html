@@ -575,7 +575,12 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("paste", (e) => {
   if (!controlOn() || e.target === kbd) return;
   const text = e.clipboardData && e.clipboardData.getData("text");
-  if (text) { e.preventDefault(); send({ type: "text", text }); toast("Pasted into the simulator"); }
+  if (!text) return;
+  e.preventDefault();
+  // The Mac rejects text over 2,000 characters (InputEvent.maxTextLength).
+  const max = 2000, chars = Array.from(text);
+  send({ type: "text", text: chars.slice(0, max).join("") });
+  toast(chars.length > max ? "Pasted the first 2,000 characters" : "Pasted into the simulator");
 });
 
 // On-screen keyboards: a hidden textarea holding one sentinel character. Anything

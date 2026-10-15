@@ -1,7 +1,9 @@
 name: CI
 
 on:
+  # Pull requests get the pull_request run; pushing to a PR branch would otherwise test it twice.
   push:
+    branches: [main]
   pull_request:
 
 concurrency:

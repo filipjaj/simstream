@@ -43,7 +43,11 @@ extension ClientMessage: Decodable {
         self = .input(.twoFingers(phase, CGPoint(x: first.x, y: first.y), CGPoint(x: points[1].x, y: points[1].y)))
       }
     case "text":
-      self = .input(.text(try c.decode(String.self, forKey: .text)))
+      let text = try c.decode(String.self, forKey: .text)
+      guard text.count <= InputEvent.maxTextLength else {
+        throw DecodingError.dataCorruptedError(forKey: .text, in: c, debugDescription: "text is longer than \(InputEvent.maxTextLength) characters")
+      }
+      self = .input(.text(text))
     case "key":
       self = .input(.key(try c.decode(UInt32.self, forKey: .code)))
     case "button":

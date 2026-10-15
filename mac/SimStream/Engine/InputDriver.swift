@@ -13,12 +13,23 @@ enum HardwareButton: String, Codable, Sendable {
 
 /// Viewer input. Touch coordinates are normalised to 0–1 of the screen.
 enum InputEvent: Equatable, Sendable {
+  /// Longest `text` event accepted; typing costs a few HID events per character.
+  static let maxTextLength = 2_000
+
   case touch(TouchPhase, x: Double, y: Double)
   /// Two fingers at once (pinch, rotate, two-finger scroll).
   case twoFingers(TouchPhase, CGPoint, CGPoint)
   case text(String)
   case key(UInt32)
   case button(HardwareButton)
+
+  /// A finger leaving the screen.
+  var isLift: Bool {
+    switch self {
+    case .touch(.up, _, _), .twoFingers(.up, _, _): true
+    default: false
+    }
+  }
 }
 
 protocol InputDriver: Sendable {
@@ -26,36 +37,78 @@ protocol InputDriver: Sendable {
   var name: String { get }
   /// Queues an event. Events are delivered in order.
   func send(_ event: InputEvent)
+  /// Drops everything queued so far, including the rest of a long text. Called when control
+  /// changes hands or is turned off, so one viewer's backlog can't outlive their turn.
+  func discardPending()
   func close()
+}
+
+/// A bounded, in-order event queue whose backlog can be discarded. Events beyond `capacity`
+/// are dropped: a controller sending faster than the simulator takes input only loses their own input.
+final class InputQueue: Sendable {
+  /// Tells a running event whether it still belongs to the current generation.
+  typealias IsCurrent = @Sendable () -> Bool
+
+  static let capacity = 512
+
+  private let continuation: AsyncStream<(InputEvent, UInt64)>.Continuation
+  private let worker: Task<Void, Never>
+  private let generation = Counter()
+
+  init(capacity: Int = InputQueue.capacity, perform: @escaping @Sendable (InputEvent, IsCurrent) async -> Void) {
+    let (stream, continuation) = AsyncStream.makeStream(of: (InputEvent, UInt64).self, bufferingPolicy: .bufferingOldest(capacity))
+    self.continuation = continuation
+    worker = Task.detached(priority: .userInitiated) { [generation] in
+      for await (event, queued) in stream {
+        let isCurrent: IsCurrent = { generation.value == queued }
+        guard isCurrent() else { continue }
+        await perform(event, isCurrent)
+      }
+    }
+  }
+
+  func send(_ event: InputEvent) { continuation.yield((event, generation.value)) }
+
+  func discardPending() { generation.increment() }
+
+  func close() {
+    continuation.finish()
+    worker.cancel()
+  }
+}
+
+private final class Counter: @unchecked Sendable { // `count` is guarded by `lock`.
+  private let lock = NSLock()
+  private var count: UInt64 = 0
+
+  var value: UInt64 { lock.withLock { count } }
+  func increment() { lock.withLock { count &+= 1 } }
 }
 
 /// Sends events over one persistent SimulatorKit HID connection: ~1 ms per event.
 final class HIDInputDriver: InputDriver {
   let name = "Direct HID"
-  private let continuation: AsyncStream<InputEvent>.Continuation
-  private let worker: Task<Void, Never>
+  private let queue: InputQueue
   private let hid: FBSimulatorHID
 
   init(hid: FBSimulatorHID, udid: String, points: CGSize) {
     self.hid = hid
-    let (stream, continuation) = AsyncStream.makeStream(of: InputEvent.self)
-    self.continuation = continuation
-    worker = Task.detached(priority: .userInitiated) {
-      for await event in stream {
-        await Self.perform(event, hid: hid, udid: udid, points: points)
-      }
+    queue = InputQueue { event, isCurrent in
+      await Self.perform(event, hid: hid, udid: udid, points: points, isCurrent: isCurrent)
     }
   }
 
-  func send(_ event: InputEvent) { continuation.yield(event) }
+  func send(_ event: InputEvent) { queue.send(event) }
+
+  func discardPending() { queue.discardPending() }
 
   func close() {
-    continuation.finish()
-    worker.cancel()
+    queue.close()
     hid.disconnect()
   }
 
-  private static func perform(_ event: InputEvent, hid: FBSimulatorHID, udid: String, points: CGSize) async {
+  private static func perform(_ event: InputEvent, hid: FBSimulatorHID, udid: String, points: CGSize,
+                              isCurrent: InputQueue.IsCurrent) async {
     do {
       switch event {
       case .touch(let phase, let x, let y):
@@ -72,9 +125,13 @@ final class HIDInputDriver: InputDriver {
         try await FBSimulatorHIDEvent.shortButtonPress(button.hidButton).sendAsync(on: hid)
       case .text(let text):
         for segment in Keymap.segments(for: text) {
+          guard isCurrent() else { return }
           switch segment {
           case .keys(let strokes):
-            for stroke in strokes { try await press(stroke, hid: hid) }
+            for stroke in strokes {
+              guard isCurrent() else { return }
+              try await press(stroke, hid: hid)
+            }
           case .paste(let chunk):
             try await paste(chunk, hid: hid, udid: udid)
           }
@@ -105,49 +162,48 @@ final class HIDInputDriver: InputDriver {
 /// Xcode update changes SimulatorKit). Each event spawns `axe`, so it costs ~0.5 s.
 final class AXeCLIInputDriver: InputDriver {
   let name = "AXe CLI (slow)"
-  private let continuation: AsyncStream<InputEvent>.Continuation
-  private let worker: Task<Void, Never>
+  private let queue: InputQueue
 
   init?(udid: String, points: CGSize) {
     guard let axe = Tools.path(of: "axe") else { return nil }
-    let (stream, continuation) = AsyncStream.makeStream(of: InputEvent.self)
-    self.continuation = continuation
-    worker = Task.detached(priority: .userInitiated) {
-      var touchStart: (x: Double, y: Double, at: Date)?
-      for await event in stream {
-        let pt = { (v: Double, max: CGFloat) in String(format: "%.1f", clamp(v) * max) }
-        var args: [String]?
-        switch event {
-        case .touch(.down, let x, let y):
-          touchStart = (x, y, Date())
-        case .touch(.move, _, _), .twoFingers:
-          break // The CLI fallback has no live drags or multi-touch.
-        case .touch(.up, let x, let y):
-          guard let start = touchStart else { break }
-          touchStart = nil
-          if hypot(x - start.x, y - start.y) < 0.01 {
-            args = ["tap", "-x", pt(x, points.width), "-y", pt(y, points.height)]
-          } else {
-            let duration = min(max(Date().timeIntervalSince(start.at), 0.1), 2)
-            args = ["swipe", "--start-x", pt(start.x, points.width), "--start-y", pt(start.y, points.height),
-                    "--end-x", pt(x, points.width), "--end-y", pt(y, points.height),
-                    "--duration", String(format: "%.2f", duration)]
-          }
-        case .text(let text): args = ["type", text]
-        case .key(let code): args = ["key", String(code)]
-        case .button(let button): args = ["button", button.rawValue]
+    let pending = PendingTouch()
+    queue = InputQueue { event, _ in
+      let pt = { (v: Double, max: CGFloat) in String(format: "%.1f", clamp(v) * max) }
+      var args: [String]?
+      switch event {
+      case .touch(.down, let x, let y):
+        pending.start = (x, y, Date())
+      case .touch(.move, _, _), .twoFingers:
+        break // The CLI fallback has no live drags or multi-touch.
+      case .touch(.up, let x, let y):
+        guard let start = pending.start else { break }
+        pending.start = nil
+        if hypot(x - start.x, y - start.y) < 0.01 {
+          args = ["tap", "-x", pt(x, points.width), "-y", pt(y, points.height)]
+        } else {
+          let duration = min(max(Date().timeIntervalSince(start.at), 0.1), 2)
+          args = ["swipe", "--start-x", pt(start.x, points.width), "--start-y", pt(start.y, points.height),
+                  "--end-x", pt(x, points.width), "--end-y", pt(y, points.height),
+                  "--duration", String(format: "%.2f", duration)]
         }
-        if let args { _ = try? await ProcessRunner.run(axe, args + ["--udid", udid]) }
+      case .text(let text): args = ["type", text]
+      case .key(let code): args = ["key", String(code)]
+      case .button(let button): args = ["button", button.rawValue]
       }
+      if let args { _ = try? await ProcessRunner.run(axe, args + ["--udid", udid]) }
     }
   }
 
-  func send(_ event: InputEvent) { continuation.yield(event) }
+  func send(_ event: InputEvent) { queue.send(event) }
 
-  func close() {
-    continuation.finish()
-    worker.cancel()
-  }
+  func discardPending() { queue.discardPending() }
+
+  func close() { queue.close() }
+}
+
+/// Where the current finger went down. Only the queue's single worker touches it.
+private final class PendingTouch: @unchecked Sendable {
+  var start: (x: Double, y: Double, at: Date)?
 }
 
 private func clamp(_ value: Double) -> Double { min(max(value, 0), 1) }

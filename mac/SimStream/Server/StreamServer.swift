@@ -19,6 +19,9 @@ final class StreamServer: @unchecked Sendable { // All mutable state is confined
   var onKeyframeNeeded: (@Sendable () -> Void)?
   /// Holder name (nil when free) and how many wait, for the host's UI.
   var onControlChanged: (@Sendable (String?, Int) -> Void)?
+  /// The holder lost control (hand-over, release, disconnect, control off). Called before the
+  /// finger-lift, so queued input from the old holder can be dropped first.
+  var onControlRevoked: (@Sendable () -> Void)?
   var latestJPEG: (@Sendable () -> Data?)?
 
   private let queue = DispatchQueue(label: "simstream.server", qos: .userInteractive)
@@ -290,6 +293,7 @@ final class StreamServer: @unchecked Sendable { // All mutable state is confined
   }
 
   private func liftFinger() {
+    onControlRevoked?()
     guard let touch = touchDown else { return }
     touchDown = nil
     switch touch {
@@ -355,7 +359,7 @@ private final class ViewerConnection {
   private static let maxVideoBacklog = 6
   private let connection: NWConnection
   private var buffer: [UInt8] = []
-  private var fragments: [UInt8]?
+  private var message = MessageAssembler()
   private var controlOut: [Data] = []
   private var pendingFrame: Data?
   private var videoQueue: [Data] = []
@@ -484,12 +488,12 @@ private final class ViewerConnection {
 
   private func handle(_ frame: WebSocketFrame) {
     switch frame.opcode {
-    case .text, .binary:
-      if frame.fin { onText?(Data(frame.payload)) } else { fragments = frame.payload }
-    case .continuation:
-      guard var partial = fragments else { return }
-      partial += frame.payload
-      if frame.fin { fragments = nil; onText?(Data(partial)) } else { fragments = partial }
+    case .text, .binary, .continuation:
+      do {
+        if let complete = try message.add(frame) { onText?(Data(complete)) }
+      } catch {
+        close()
+      }
     case .ping:
       controlOut.append(WebSocketFrame.encode(.pong, Data(frame.payload)))
       pump()
