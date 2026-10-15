@@ -121,6 +121,8 @@ struct ViewerState: Decodable, Equatable, Sendable {
   let choices: [Choice]
   /// The Mac accepts `touches`. Absent from Macs built before multi-touch.
   var multitouch: Bool? = nil
+  /// Name of the app the host keeps viewers in. Home, Lock and system gestures do nothing while set.
+  var lockedApp: String? = nil
 
   var expiryDate: Date { Date(timeIntervalSince1970: expiresAt / 1000) }
 }

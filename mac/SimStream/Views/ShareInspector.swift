@@ -26,9 +26,10 @@ struct ShareInspector: View {
         NewShareSections(device: device)
       }
 
-      Section("Stream") {
+      Section {
         Toggle("Viewers can control", isOn: $session.allowControl)
         Toggle("Viewers can switch simulators", isOn: $session.allowSwitching)
+        AppLockPicker(device: session.isActive ? session.device : device)
         Picker("Quality", selection: $session.quality) {
           ForEach(StreamQuality.allCases) { Text($0.title).tag($0) }
         }
@@ -41,6 +42,17 @@ struct ShareInspector: View {
           Text("4 hours").tag(TimeInterval(4 * 60 * 60))
         }
         .disabled(session.isActive)
+      } header: {
+        Text("Stream")
+      } footer: {
+        // The simulator uses this Mac's network, so control over a public link reaches it too.
+        if session.allowControl && session.options.tunnel {
+          if let app = session.lockedApp {
+            Text("Viewers stay in \(app.name): Home, Lock and system gestures are off, and SimStream reopens \(app.name) if something else comes to the front. Web views inside the app can still reach your Mac's localhost and local network.")
+          } else {
+            Text("Anyone with the link can use Safari in this simulator to reach your Mac's localhost and local network.")
+          }
+        }
       }
     }
     .formStyle(.grouped)
@@ -242,5 +254,37 @@ struct QRCode: View {
     guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
           let cgImage = CIContext().createCGImage(output, from: output.extent) else { return nil }
     return NSImage(cgImage: cgImage, size: NSSize(width: output.extent.width, height: output.extent.height))
+  }
+}
+
+/// Chooses the app viewers are kept in. Lists the user apps installed on the simulator.
+private struct AppLockPicker: View {
+  let device: SimulatorDevice?
+  @Environment(AppModel.self) private var model
+  @Environment(ShareSession.self) private var session
+  @State private var apps: [LockedApp] = []
+
+  var body: some View {
+    @Bindable var session = session
+    Picker("Keep viewers in", selection: $session.lockedApp) {
+      Text("Any App").tag(LockedApp?.none)
+      if !apps.isEmpty { Divider() }
+      ForEach(apps) { Text($0.name).tag(Optional($0)) }
+      // A lock set elsewhere (CLI, another simulator) stays selectable.
+      if let locked = session.lockedApp, !apps.contains(locked) {
+        Text(locked.name).tag(Optional(locked))
+      }
+    }
+    .disabled(device?.isBooted != true)
+    .task(id: device?.id) { await load() }
+  }
+
+  private func load() async {
+    guard let device, device.isBooted else { return apps = [] }
+    if device.isRemote, let host = model.remotes.host(for: device) {
+      apps = await RemoteShare.apps(host, udid: device.udid)
+    } else {
+      apps = await InstalledApps.list(udid: device.udid)
+    }
   }
 }

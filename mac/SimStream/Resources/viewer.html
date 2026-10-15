@@ -58,6 +58,9 @@
   .bars.poor i:nth-child(1) { background: var(--red); }
   .viewonly { display: none; }
   body.viewonly .viewonly { display: inline-flex; }
+  #lockPill { display: none; }
+  body.locked #lockPill { display: inline-flex; }
+  body.locked .toolbar [data-button] { display: none; }
 
   /* Screen */
   #stage { position: relative; min-height: 0; display: grid; place-items: center; padding: 8px 16px; }
@@ -155,6 +158,7 @@
   </button>
   <span class="spacer"></span>
   <span class="pill viewonly" title="The host turned off remote control"><svg style="width:15px;height:15px"><use href="#i-eye"/></svg>View only</span>
+  <span class="pill" id="lockPill" title="The host keeps this share inside one app"><svg style="width:15px;height:15px"><use href="#i-lock"/></svg><span id="lockName"></span></span>
   <span class="pill live" aria-label="Live">LIVE</span>
   <span class="pill" id="timer" title="Time until this link expires">15:00</span>
   <span class="pill" id="viewers" title="People watching"><svg style="width:16px;height:16px"><use href="#i-person"/></svg><span id="viewerCount">1</span></span>
@@ -248,6 +252,9 @@ function applyState(next) {
   $("viewerCount").textContent = next.viewers;
   $("viewers").title = next.viewers === 1 ? "1 person watching" : `${next.viewers} people watching`;
   document.body.classList.toggle("viewonly", !next.controlEnabled);
+  // Locked to one app: Home and Lock would be dropped by the Mac, so they're hidden.
+  document.body.classList.toggle("locked", !!next.lockedApp);
+  $("lockName").textContent = next.lockedApp || "";
   renderControl();
 
   const button = $("deviceButton");

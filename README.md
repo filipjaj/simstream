@@ -26,6 +26,8 @@ This vendors AXe's frameworks, builds both targets and installs `~/Applications/
 ```sh
 simstream list
 simstream start --name "iPhone 17" --minutes 15   # prints the link once it's live
+simstream apps --udid <udid>                      # apps you can keep viewers in
+simstream ctl lock com.example.app                # or start with --lock-app com.example.app
 simstream ctl control off
 simstream stop
 ```

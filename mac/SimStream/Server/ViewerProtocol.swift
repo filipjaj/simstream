@@ -96,6 +96,8 @@ struct ViewerState: Encodable, Equatable, Sendable {
   let controlEnabled: Bool
   /// Booted simulators the viewer may switch to; empty unless the host allows it.
   let choices: [Choice]
+  /// Name of the app viewers are kept in; Home, Lock and system gestures do nothing while set.
+  let lockedApp: String?
   /// The server accepts two-finger `touches` messages.
   let multitouch = true
 }

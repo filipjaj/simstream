@@ -6,6 +6,8 @@ private final class InputRouter: @unchecked Sendable { // State is guarded by `l
   private let lock = NSLock()
   private var link: SimulatorLink?
   private var enabled = true
+  /// Set while the share is locked to one app.
+  private var edges: EdgeGuard?
 
   func configure(link: SimulatorLink?, enabled: Bool) {
     lock.withLock {
@@ -16,9 +18,14 @@ private final class InputRouter: @unchecked Sendable { // State is guarded by `l
 
   func setEnabled(_ enabled: Bool) { lock.withLock { self.enabled = enabled } }
 
+  func setLocked(_ locked: Bool) { lock.withLock { edges = locked ? EdgeGuard() : nil } }
+
   func route(_ event: InputEvent) {
-    let target = lock.withLock { enabled ? link : nil }
-    target?.input.send(event)
+    let (target, events): (SimulatorLink?, [InputEvent]) = lock.withLock {
+      guard enabled, let link else { return (nil, []) }
+      return (link, edges?.filter(event) ?? [event])
+    }
+    events.forEach { target?.input.send($0) }
   }
 }
 
@@ -76,6 +83,17 @@ final class ShareSession {
       remoteControl("switching \(allowSwitching ? "on" : "off")")
     }
   }
+  /// Keeps viewers inside one app: system gestures and buttons are dropped, and the app is
+  /// brought back to the front whenever something else opens.
+  var lockedApp: LockedApp? {
+    didSet {
+      guard lockedApp != oldValue else { return }
+      router.setLocked(lockedApp != nil)
+      publishState()
+      remoteControl(lockedApp.map { LockedApp.isValidBundleID($0.bundleID) ? "lock \($0.bundleID)" : "lock off" } ?? "lock off")
+      startLockWatch()
+    }
+  }
   var quality = StreamQuality.balanced {
     didSet {
       pump.setQuality(quality)
@@ -108,6 +126,7 @@ final class ShareSession {
   private var tunnel: QuickTunnel?
   private var startTask: Task<Void, Never>?
   private var expiryTask: Task<Void, Never>?
+  private var lockWatch: Task<Void, Never>?
 
   init(pool: LinkPool, catalog: SimulatorCatalog) {
     self.pool = pool
@@ -179,6 +198,8 @@ final class ShareSession {
     let server = StreamServer(token: token, page: Self.viewerPage)
     self.server = server
     router.configure(link: link, enabled: allowControl)
+    router.setLocked(lockedApp != nil)
+    startLockWatch()
     server.onMessage = { [weak self, router] message in
       switch message {
       case .input(let event):
@@ -284,6 +305,8 @@ final class ShareSession {
     startTask = nil
     expiryTask?.cancel()
     expiryTask = nil
+    lockWatch?.cancel()
+    lockWatch = nil
     tunnel?.stop()
     tunnel = nil
     server?.stop()
@@ -296,6 +319,22 @@ final class ShareSession {
     controllerName = nil
     waitingCount = 0
     stats = StreamStats()
+  }
+
+  /// While a local share is locked and viewers have control, brings the locked app back to the
+  /// front about once a second. Remote shares run this on the remote Mac.
+  private func startLockWatch() {
+    lockWatch?.cancel()
+    lockWatch = nil
+    guard lockedApp != nil, remoteHost == nil, server != nil else { return }
+    lockWatch = Task { [weak self] in
+      while !Task.isCancelled {
+        if let self, let app = lockedApp, allowControl, let udid = device?.udid {
+          await InstalledApps.bringToFront(app.bundleID, udid: udid)
+        }
+        try? await Task.sleep(for: .seconds(1))
+      }
+    }
   }
 
   private func viewerSelected(_ udid: String) {
@@ -317,7 +356,8 @@ final class ShareSession {
       expiresAt: (expiresAt ?? Date().addingTimeInterval(options.lifetime)).timeIntervalSince1970 * 1000,
       viewers: viewers,
       controlEnabled: allowControl,
-      choices: choices
+      choices: choices,
+      lockedApp: lockedApp?.name
     )
     guard let data = try? JSONEncoder().encode(state) else { return }
     server.publish(state: data)
@@ -352,11 +392,11 @@ extension ShareSession {
     teardown()
     self.device = device
     phase = .starting("Starting on \(host.name)…")
-    let (minutes, quality, control, switching) = (options.lifetime / 60, quality, allowControl, allowSwitching)
+    let (minutes, quality, control, switching, locked) = (options.lifetime / 60, quality, allowControl, allowSwitching, lockedApp?.bundleID)
     startTask = Task { [weak self] in
       do {
         try await RemoteShell.sync(host)
-        let state = try await RemoteShare.start(host, udid: device.udid, minutes: minutes, quality: quality, control: control, switching: switching)
+        let state = try await RemoteShare.start(host, udid: device.udid, minutes: minutes, quality: quality, control: control, switching: switching, lockedApp: locked)
         guard let self, !Task.isCancelled else { return }
         if state.phase == .live {
           adopt(state, device: device, host: host)
@@ -400,6 +440,7 @@ extension ShareSession {
       inputTransport = state.transport.map { "\($0) on \(remoteHost?.name ?? "remote")" }
       if allowControl != state.allowControl { allowControl = state.allowControl }
       if allowSwitching != state.allowSwitching { allowSwitching = state.allowSwitching }
+      if lockedApp != state.lockedApp { lockedApp = state.lockedApp }
       if quality.cliName != state.quality, let match = StreamQuality.allCases.first(where: { $0.cliName == state.quality }) { quality = match }
     case .starting:
       phase = .starting(state.step ?? "Starting…")

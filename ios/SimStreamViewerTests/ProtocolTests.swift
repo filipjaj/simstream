@@ -290,10 +290,17 @@ struct TouchTrackerTests {
     #expect(points == [["id": 0, "x": 0, "y": 0.5], ["id": 1, "x": 0.25, "y": 1]])
   }
 
+  @Test func readsLockedApp() throws {
+    let text = #"{"type":"state","device":{"udid":"U","name":"n","runtime":"r","symbol":"iphone","width":1,"height":2,"cornerRatio":0},"expiresAt":0,"viewers":1,"controlEnabled":true,"choices":[],"multitouch":true,"lockedApp":"Kupp"}"#
+    guard case .state(let state) = try JSONDecoder().decode(ServerMessage.self, from: Data(text.utf8)) else { Issue.record("expected state"); return }
+    #expect(state.lockedApp == "Kupp")
+  }
+
   @Test func readsMultitouchCapability() throws {
     let text = #"{"type":"state","device":{"udid":"U","name":"n","runtime":"r","symbol":"iphone","width":1,"height":2,"cornerRatio":0},"expiresAt":0,"viewers":1,"controlEnabled":true,"choices":[],"multitouch":true}"#
     guard case .state(let state) = try JSONDecoder().decode(ServerMessage.self, from: Data(text.utf8)) else { Issue.record("expected state"); return }
     #expect(state.multitouch == true)
+    #expect(state.lockedApp == nil)
     #expect(try JSONDecoder().decode(ServerMessage.self, from: Data(#"{"type":"denied"}"#.utf8)) == .denied)
   }
 }

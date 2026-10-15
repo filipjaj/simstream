@@ -8,12 +8,13 @@ import Foundation
 //                                                 disconnects; prints the link once it's live
 //   simstream status [--json]                     the background share, if any
 //   simstream ctl <command>                       extend · pass · control on|off · switching on|off ·
-//                                                 quality data-saver|balanced|sharp
+//                                                 quality data-saver|balanced|sharp · lock <bundle-id>|off
+//   simstream apps --udid <udid> [--json]         user apps on a simulator, for --lock-app
 //   simstream stop                                end the background share
 //   simstream share [share options]               share in the foreground; Ctrl-C stops
 //
 // Share options: --udid <udid> | --name <name>, --minutes 15, --quality balanced, --port <n>,
-// --no-tunnel, --view-only, --allow-switching.
+// --no-tunnel, --view-only, --allow-switching, --lock-app <bundle-id> (keep viewers inside one app).
 //
 // A background share keeps its state in ~/.local/state/simstream/share.json and reads commands
 // from the FIFO ~/.local/state/simstream/control, which is what `status` and `ctl` use.
@@ -64,6 +65,7 @@ struct ShareState: Codable, Equatable {
   var allowControl = true
   var allowSwitching = false
   var quality = "balanced"
+  var lockedApp: LockedApp?
 }
 
 struct DeviceRow: Encodable {
@@ -117,10 +119,12 @@ func printState(_ state: ShareState, json: Bool) {
   case .live:
     print("Sharing \(state.deviceName ?? "?") (\(state.runtime ?? "")) \(state.udid ?? "")")
     if let url = state.url { print("Public: \(url)") }
+    if state.url != nil, state.allowControl { warnAboutControl() }
     if let expires = state.expiresAt {
       print("Expires: \(Date(timeIntervalSince1970: expires / 1000).formatted(date: .omitted, time: .standard))")
     }
     print("Viewers: \(state.viewers) · Control: \(state.holder ?? "nobody") · \(state.waiting) waiting")
+    if let app = state.lockedApp { print("Locked to: \(app.name) (\(app.bundleID))") }
   case .ended: print("Ended: \(state.message ?? "")")
   case .failed: print("Failed: \(state.message ?? "")")
   }
@@ -157,6 +161,12 @@ func run() async -> Int32 {
     } else {
       for device in catalog.booted { print("\(device.udid)  \(device.name)  \(device.runtime)") }
     }
+    return 0
+
+  case "apps":
+    guard let udid = flags.values["udid"] else { return fail("usage: simstream apps --udid <udid>") }
+    let apps = await InstalledApps.list(udid: udid)
+    if json { print(encode(apps)) } else { apps.forEach { print("\($0.bundleID)  \($0.name)") } }
     return 0
 
   case "status":
@@ -243,6 +253,18 @@ func startBackground(flags: Flags, json: Bool) async -> Int32 {
   return fail("the share didn't go live within 90 seconds; see \(Paths.log.path)")
 }
 
+/// The simulator shares this Mac's network, so control over a public link reaches it too. To stderr,
+/// so scripts reading the link from stdout are unaffected.
+func warnAboutControl() {
+  FileHandle.standardError.write(Data("Note: viewers with control can use Safari in the simulator to reach this Mac's localhost and network. Use --view-only or `simstream ctl control off` to prevent that.\n".utf8))
+}
+
+/// The installed app with this bundle ID, if it's a user app on that simulator.
+func installedApp(_ bundleID: String, udid: String) async -> LockedApp? {
+  guard LockedApp.isValidBundleID(bundleID) else { return nil }
+  return await InstalledApps.list(udid: udid).first { $0.bundleID == bundleID }
+}
+
 /// Runs a share in this process. With `--state` it also publishes share.json and reads the control FIFO.
 @MainActor
 func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
@@ -276,6 +298,15 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
   session.allowControl = !flags.switches.contains("view-only")
   session.allowSwitching = flags.switches.contains("allow-switching")
   session.quality = quality(named: flags.values["quality"]) ?? .balanced
+  if let bundleID = flags.values["lock-app"] {
+    guard let app = await installedApp(bundleID, udid: device.udid) else {
+      state.phase = .failed
+      state.message = "\(bundleID) isn't installed on \(device.name)."
+      publish()
+      return fail(state.message ?? "")
+    }
+    session.lockedApp = app
+  }
 
   for signal in [SIGINT, SIGTERM, SIGHUP] {
     Foundation.signal(signal, SIG_IGN)
@@ -288,14 +319,20 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
   }
 
   func handle(_ line: String) {
-    let words = line.lowercased().split(separator: " ").map(String.init)
-    switch (words.first, words.dropFirst().first) {
+    // Only the command word is case-insensitive: bundle IDs aren't.
+    let words = line.split(separator: " ").map(String.init)
+    switch (words.first?.lowercased(), words.dropFirst().first) {
     case ("extend", _): session.extend()
     case ("pass", _): session.passControl()
     case ("stop", _): session.stop()
-    case ("control", let value?): session.allowControl = value == "on"
-    case ("switching", let value?): session.allowSwitching = value == "on"
-    case ("quality", let value?): if let q = quality(named: value) { session.quality = q }
+    case ("control", let value?): session.allowControl = value.lowercased() == "on"
+    case ("switching", let value?): session.allowSwitching = value.lowercased() == "on"
+    case ("quality", let value?): if let q = quality(named: value.lowercased()) { session.quality = q }
+    case ("lock", "off"?): session.lockedApp = nil
+    case ("lock", let bundleID?):
+      Task { @MainActor in
+        if let app = await installedApp(bundleID, udid: session.device?.udid ?? device.udid) { session.lockedApp = app }
+      }
     default: break
     }
   }
@@ -330,6 +367,7 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
     var next = state
     next.allowControl = session.allowControl
     next.allowSwitching = session.allowSwitching
+    next.lockedApp = session.lockedApp
     next.quality = session.quality.cliName
     next.localURL = session.localURL?.absoluteString
     next.viewers = session.viewers
@@ -351,7 +389,10 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
       state = next
       publish()
       if let local = state.localURL { once("local", "Local: \(local)") }
-      if state.phase == .live, let url = state.url, session.options.tunnel { once("public", "Public: \(url)") }
+      if state.phase == .live, let url = state.url, session.options.tunnel {
+        once("public", "Public: \(url)")
+        if session.allowControl, printed.insert("warning").inserted { warnAboutControl() }
+      }
     }
     switch state.phase {
     case .ended:

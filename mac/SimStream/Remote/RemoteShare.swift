@@ -22,16 +22,18 @@ struct RemoteShareState: Decodable, Equatable, Sendable {
   var allowControl = true
   var allowSwitching = false
   var quality = "balanced"
+  var lockedApp: LockedApp?
 }
 
 /// Drives the detached `simstream` share on a remote Mac with short SSH calls. The share runs
 /// on the remote in its own session, so it stays live when this Mac sleeps, closes or quits.
 enum RemoteShare {
   static func start(_ host: RemoteHost, udid: String, minutes: Double, quality: StreamQuality,
-                    control: Bool, switching: Bool) async throws -> RemoteShareState {
+                    control: Bool, switching: Bool, lockedApp: String?) async throws -> RemoteShareState {
     var arguments = ["start", "--json", "--udid", udid, "--minutes", String(Int(minutes)), "--quality", quality.cliName]
     if !control { arguments.append("--view-only") }
     if switching { arguments.append("--allow-switching") }
+    if let lockedApp, LockedApp.isValidBundleID(lockedApp) { arguments += ["--lock-app", lockedApp] }
     let result = try await RemoteShell.run(host, cli(arguments))
     if let state = try? JSONDecoder().decode(RemoteShareState.self, from: result.output) { return state }
     throw result.status == 255 ? RemoteError.unreachable : RemoteError.startFailed
@@ -45,6 +47,12 @@ enum RemoteShare {
 
   static func control(_ host: RemoteHost, _ command: String) async {
     _ = try? await RemoteShell.run(host, cli(["ctl"] + command.split(separator: " ").map(String.init)))
+  }
+
+  /// User apps on a simulator of the remote Mac, for the lock picker.
+  static func apps(_ host: RemoteHost, udid: String) async -> [LockedApp] {
+    guard let result = try? await RemoteShell.run(host, cli(["apps", "--json", "--udid", udid])), result.status == 0 else { return [] }
+    return (try? JSONDecoder().decode([LockedApp].self, from: result.output)) ?? []
   }
 
   static func stop(_ host: RemoteHost) async {

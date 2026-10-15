@@ -20,6 +20,12 @@ A viewer with control acts as a user of a device that sits on your Mac's network
 
 Share a dedicated simulator with nothing signed in, and leave control off when people only need to watch.
 
+## Keeping viewers in one app
+
+**Keep viewers in** (`--lock-app <bundle-id>` in the CLI) narrows what a viewer with control can do. SimStream drops the Home, Lock and Siri buttons and drags that start on the top or bottom edge (Home, the app switcher, Control Centre, Notification Centre), and brings the app back to the front about once a second if anything else opens.
+
+It's a guard rail, not a sandbox. A viewer can still get out of the app for up to a second or two, for example through a link that opens Safari. Anything inside the app, such as a web view, has the same network access as the rest of the simulator. In landscape, only the bring-back applies.
+
 ## Transport
 
 - The local server binds to `127.0.0.1` only. Public access goes through a Cloudflare quick tunnel (`cloudflared`), which terminates TLS at Cloudflare. Cloudflare can see the stream; don't share anything you wouldn't send through it.

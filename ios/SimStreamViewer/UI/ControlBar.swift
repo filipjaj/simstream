@@ -12,8 +12,11 @@ struct ControlBar: View {
       VStack(spacing: 10) {
         header
         HStack(spacing: 8) {
-          control("Home", systemImage: "house") { session.press(.home) }
-          control("Lock", systemImage: "lock") { session.press(.lock) }
+          // The Mac drops hardware buttons while the share is locked to one app.
+          if session.state?.lockedApp == nil {
+            control("Home", systemImage: "house") { session.press(.home) }
+            control("Lock", systemImage: "lock") { session.press(.lock) }
+          }
           Toggle(isOn: $showsKeyboard) {
             Label("Keyboard", systemImage: "keyboard")
           }
@@ -47,6 +50,10 @@ struct ControlBar: View {
           }
           if session.state?.controlEnabled == false {
             Text("View only")
+          }
+          if let app = session.state?.lockedApp {
+            Label(app, systemImage: "lock.fill")
+              .accessibilityLabel("Locked to \(app)")
           }
         }
         .font(.caption)
