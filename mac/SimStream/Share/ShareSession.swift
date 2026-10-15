@@ -376,7 +376,8 @@ final class ShareSession {
 
   /// From the app bundle, or next to the `simstream` CLI binary.
   private static let viewerPage: Data = {
-    let besideBinary = Bundle.main.executableURL?.deletingLastPathComponent().appending(path: "viewer.html")
+    // Resolve symlinks: ~/.local/bin/simstream points into ~/.local/share/simstream, where viewer.html lives.
+    let besideBinary = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent().appending(path: "viewer.html")
     let candidates = [Bundle.main.url(forResource: "viewer", withExtension: "html"), besideBinary].compactMap { $0 }
     return candidates.lazy.compactMap { try? Data(contentsOf: $0) }.first ?? Data("Viewer page missing.".utf8)
   }()

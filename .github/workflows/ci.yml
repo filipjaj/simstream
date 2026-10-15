@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Both apps target macOS/iOS 26, and the Mac tests run on the host.
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen and AXe
+        run: brew install xcodegen cameroncooke/axe/axe
+
+      - name: Mac app and CLI (the app scheme builds the CLI too)
+        working-directory: mac
+        run: |
+          ./scripts/vendor-axe.sh
+          xcodegen generate
+          xcodebuild test -project SimStream.xcodeproj -scheme SimStream -destination 'platform=macOS' \
+            -derivedDataPath build -resultBundlePath ../results/mac.xcresult -quiet
+
+      - name: iOS viewer
+        working-directory: ios
+        run: |
+          xcodegen generate
+          # The newest available iPhone simulator; runner images change device lists over time.
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          ios = sorted((r for r in runtimes if ".iOS-" in r), key=lambda r: [int(p) for p in r.rsplit("iOS-", 1)[1].split("-")])
+          print(next(d["udid"] for r in reversed(ios) for d in runtimes[r] if d["name"].startswith("iPhone")))')
+          xcodebuild test -project SimStreamViewer.xcodeproj -scheme SimStreamViewer -destination "id=$udid" \
+            -derivedDataPath build -resultBundlePath ../results/ios.xcresult -quiet
+
+      # A scheme that silently runs no tests still exits 0, so check the counts.
+      - name: Test counts
+        run: |
+          for bundle in results/*.xcresult; do
+            xcrun xcresulttool get test-results summary --path "$bundle" --format json | python3 -c '
+          import json, sys
+          s = json.load(sys.stdin)
+          print("%s: %s, %d/%d passed" % (sys.argv[1], s["result"], s["passedTests"], s["totalTestCount"]))
+          sys.exit(0 if s["result"] == "Passed" and s["totalTestCount"] > 0 else 1)' "$bundle"
+          done
