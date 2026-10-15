@@ -115,3 +115,39 @@ struct HTTPRequest: Equatable {
     headers["upgrade"]?.lowercased() == "websocket" && headers["sec-websocket-key"] != nil
   }
 }
+
+/// Joins fragmented WebSocket messages. The size limit applies to the whole message, not just
+/// each frame, so a viewer can't grow one message without bound through continuation frames.
+struct MessageAssembler: Sendable {
+  enum Failure: Error, Equatable { case tooLarge, unexpectedContinuation, interleaved }
+
+  static let maxMessage = WebSocketFrame.maxClientPayload
+
+  private var partial: [UInt8]?
+
+  /// The complete message once its final frame arrives; nil while more fragments are due.
+  mutating func add(_ frame: WebSocketFrame) throws -> [UInt8]? {
+    switch frame.opcode {
+    case .text, .binary:
+      guard partial == nil else { throw Failure.interleaved }
+      if frame.fin { return frame.payload }
+      partial = frame.payload
+      return nil
+    case .continuation:
+      guard var message = partial else { throw Failure.unexpectedContinuation }
+      guard message.count + frame.payload.count <= Self.maxMessage else {
+        partial = nil
+        throw Failure.tooLarge
+      }
+      message += frame.payload
+      if frame.fin {
+        partial = nil
+        return message
+      }
+      partial = message
+      return nil
+    case .close, .ping, .pong:
+      return nil
+    }
+  }
+}

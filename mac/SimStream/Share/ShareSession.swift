@@ -16,13 +16,27 @@ private final class InputRouter: @unchecked Sendable { // State is guarded by `l
     }
   }
 
-  func setEnabled(_ enabled: Bool) { lock.withLock { self.enabled = enabled } }
+  func setEnabled(_ enabled: Bool) {
+    lock.withLock { self.enabled = enabled }
+    if !enabled { discardPending() }
+  }
+
+  /// Control changed hands or was turned off: drop the previous holder's backlog and any
+  /// half-seen edge gesture, so none of it reaches the simulator afterwards.
+  func discardPending() {
+    let target = lock.withLock {
+      if edges != nil { edges = EdgeGuard() }
+      return link
+    }
+    target?.input.discardPending()
+  }
 
   func setLocked(_ locked: Bool) { lock.withLock { edges = locked ? EdgeGuard() : nil } }
 
   func route(_ event: InputEvent) {
     let (target, events): (SimulatorLink?, [InputEvent]) = lock.withLock {
-      guard enabled, let link else { return (nil, []) }
+      // Lifts still go through with control off: the server sends one to release a held finger.
+      guard enabled || event.isLift, let link else { return (nil, []) }
       return (link, edges?.filter(event) ?? [event])
     }
     events.forEach { target?.input.send($0) }
@@ -210,6 +224,7 @@ final class ShareSession {
         break
       }
     }
+    server.onControlRevoked = { [router] in router.discardPending() }
     server.onViewersChanged = { [weak self] count in
       Task { @MainActor in
         self?.viewers = count

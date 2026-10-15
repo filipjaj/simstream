@@ -84,6 +84,15 @@ enum Paths {
   static let log = state.appending(path: "share.log")
 }
 
+/// share.json and share.log hold the live link, which grants control of the simulator. Keeps the
+/// folder and its files private to this user, including ones an older version left world-readable.
+func preparePrivateStateDirectory() {
+  try? FileManager.default.createDirectory(at: Paths.state, withIntermediateDirectories: true,
+                                           attributes: [.posixPermissions: 0o700])
+  chmod(Paths.state.path, 0o700)
+  for file in [Paths.stateFile, Paths.log, Paths.control] { chmod(file.path, 0o600) }
+}
+
 func fail(_ message: String) -> Int32 {
   FileHandle.standardError.write(Data("simstream: \(message)\n".utf8))
   return 1
@@ -147,6 +156,9 @@ nonisolated(unsafe) var retained: [AnyObject] = [] // Signal sources live for th
 
 @MainActor
 func run() async -> Int32 {
+  // Files this process and its background share create (share.json, share.log, the FIFO) carry
+  // the live link, so none of them may be readable by other accounts.
+  umask(0o077)
   let arguments = CommandLine.arguments.dropFirst()
   let command = arguments.first ?? "help"
   let flags = Flags(arguments.dropFirst())
@@ -214,7 +226,7 @@ func stopBackground() async -> Bool {
 @MainActor
 func startBackground(flags: Flags, json: Bool) async -> Int32 {
   guard await stopBackground() else { return fail("a previous share is still running") }
-  try? FileManager.default.createDirectory(at: Paths.state, withIntermediateDirectories: true)
+  preparePrivateStateDirectory()
   try? FileManager.default.removeItem(at: Paths.stateFile)
 
   var childArguments = ["share", "--state", Paths.state.path]
@@ -229,7 +241,7 @@ func startBackground(flags: Flags, json: Bool) async -> Int32 {
   posix_spawn_file_actions_init(&actions)
   defer { posix_spawn_file_actions_destroy(&actions) }
   posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-  posix_spawn_file_actions_addopen(&actions, 1, Paths.log.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+  posix_spawn_file_actions_addopen(&actions, 1, Paths.log.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
   posix_spawn_file_actions_adddup2(&actions, 1, 2)
 
   let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
