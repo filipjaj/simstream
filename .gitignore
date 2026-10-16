@@ -15,3 +15,6 @@ mac/Vendor/Frameworks/
 # Per-developer signing (team ID, bundle ID prefix)
 ios/Config/Local.xcconfig
 
+
+# SwiftProbe test profiles (per machine)
+.swiftprobe.json
