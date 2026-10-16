@@ -5,6 +5,30 @@
 # Remote hosts get a copy of ~/.local/share/simstream over SSH. Re-run after `brew upgrade axe` or an Xcode update.
 set -euo pipefail
 cd "${0:A:h}/.."
+
+# Check everything up front, so a missing tool is one clear message instead of a build error.
+problems=() packages=()
+(( ${$(sw_vers -productVersion)%%.*} >= 26 )) || problems+=("SimStream needs macOS 26 or later.")
+if [[ $(xcode-select -p 2>/dev/null) != *.app/Contents/Developer ]]; then
+  problems+=("Select Xcode, not the Command Line Tools: sudo xcode-select -s /Applications/Xcode.app")
+elif (( ${$(xcodebuild -version 2>/dev/null | awk 'NR==1 {print $2}')%%.*} < 26 )); then
+  problems+=("SimStream needs Xcode 26 or later.")
+fi
+command -v xcodegen >/dev/null || packages+=(xcodegen)
+if [[ -z ${AXE_FRAMEWORKS-} ]] && ! { command -v brew >/dev/null && [[ -d $(brew --prefix axe 2>/dev/null)/libexec/Frameworks ]] }; then
+  packages+=(cameroncooke/axe/axe)
+fi
+command -v cloudflared >/dev/null || [[ -x /opt/homebrew/bin/cloudflared ]] || packages+=(cloudflared)
+if (( ${#packages} )); then
+  command -v brew >/dev/null || problems+=("Install Homebrew from https://brew.sh, then run the next line.")
+  problems+=("Install the build tools: brew install ${packages[*]}")
+fi
+if (( ${#problems} )); then
+  print -u2 "Can't install SimStream yet:"
+  printf '  - %s\n' $problems >&2
+  exit 1
+fi
+
 ./scripts/vendor-axe.sh
 xcodegen generate --quiet
 for scheme in SimStream SimStreamCLI; do
