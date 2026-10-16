@@ -14,8 +14,15 @@ struct ControlBar: View {
         HStack(spacing: 8) {
           // The Mac drops hardware buttons while the share is locked to one app.
           if session.state?.lockedApp == nil {
-            control("Home", systemImage: "house") { session.press(.home) }
-            control("Lock", systemImage: "lock") { session.press(.lock) }
+            if session.state?.device.isAndroid == true {
+              control("Back", systemImage: "chevron.backward") { session.press(.back) }
+              control("Home", systemImage: "circle") { session.press(.home) }
+              control("Recent Apps", systemImage: "square.on.square") { session.press(.recents) }
+              control("Power", systemImage: "power") { session.press(.lock) }
+            } else {
+              control("Home", systemImage: "house") { session.press(.home) }
+              control("Lock", systemImage: "lock") { session.press(.lock) }
+            }
           }
           Toggle(isOn: $showsKeyboard) {
             Label("Keyboard", systemImage: "keyboard")
@@ -83,6 +90,16 @@ struct ControlBar: View {
   ZStack(alignment: .bottom) {
     Color.indigo.ignoresSafeArea()
     ControlBar(session: StreamSession(preview: .live, state: .preview, latency: 62),
+               showsKeyboard: .constant(false), close: {}, dismiss: {})
+      .padding()
+  }
+  .preferredColorScheme(.dark)
+}
+
+#Preview("Android") {
+  ZStack(alignment: .bottom) {
+    Color.indigo.ignoresSafeArea()
+    ControlBar(session: StreamSession(preview: .live, state: .androidPreview, latency: 62),
                showsKeyboard: .constant(false), close: {}, dismiss: {})
       .padding()
   }

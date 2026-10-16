@@ -11,7 +11,7 @@ struct SimulatorDevice: Identifiable, Hashable, Sendable {
   }
 
   enum Family: Sendable {
-    case iPhone, iPad, watch, tv, vision
+    case iPhone, iPad, watch, tv, vision, androidPhone, androidTablet
 
     var symbol: String {
       switch self {
@@ -20,8 +20,14 @@ struct SimulatorDevice: Identifiable, Hashable, Sendable {
       case .watch: "applewatch"
       case .tv: "appletv"
       case .vision: "visionpro"
+      case .androidPhone: "smartphone"
+      case .androidTablet: "rectangle.portrait"
       }
     }
+  }
+
+  enum Platform: String, Codable, Sendable {
+    case iOS = "ios", android
   }
 
   let udid: String
@@ -34,6 +40,11 @@ struct SimulatorDevice: Identifiable, Hashable, Sendable {
   let family: Family
   /// The RemoteHost this simulator runs on; nil for this Mac.
   var hostID: String?
+  var platform = Platform.iOS
+  /// The serial adb addresses a running Android device by ("emulator-5554", a USB serial, "ip:port").
+  var adbSerial: String?
+  /// A real phone or tablet, not a simulator or emulator. Sharing one hands viewers a personal device.
+  var isPhysical = false
 
   var id: String { hostID.map { "\($0)/\(udid)" } ?? udid }
   var isRemote: Bool { hostID != nil }
@@ -43,11 +54,15 @@ struct SimulatorDevice: Identifiable, Hashable, Sendable {
   var cornerRatio: Double {
     switch family {
     case .iPhone: name.contains("SE") ? 0 : 0.13
-    case .iPad: 0.03
+    case .iPad, .androidTablet: 0.03
     case .watch: 0.2
     case .tv, .vision: 0
+    case .androidPhone: 0.09
     }
   }
+
+  /// Simulators and emulators can be shut down from SimStream; real devices can't.
+  var canShutDown: Bool { !isPhysical }
 }
 
 extension SimulatorDevice {
@@ -113,7 +128,10 @@ final class SimulatorCatalog {
   private(set) var devices: [SimulatorDevice] = []
   private(set) var loadError: String?
   private(set) var transitioning: Set<String> = []
+  /// Why the last boot of a device failed, by udid; cleared on the next attempt.
+  private(set) var bootErrors: [String: String] = [:]
   private var pollTask: Task<Void, Never>?
+  private let android = AndroidDiscovery()
 
   var booted: [SimulatorDevice] { devices.filter(\.isBooted) }
 
@@ -137,9 +155,10 @@ final class SimulatorCatalog {
   }
 
   func refresh() async {
+    async let androidDevices = android.devices()
     do {
       let result = try await ProcessRunner.run(Tools.xcrun, ["simctl", "list", "devices", "available", "-j"])
-      let parsed = try SimulatorDevice.parseList(result.output)
+      let parsed = try SimulatorDevice.parseList(result.output) + (await androidDevices)
       let sorted = parsed.sorted { lhs, rhs in
         if lhs.runtimeVersion != rhs.runtimeVersion { return !lhs.runtimeVersion.lexicographicallyPrecedes(rhs.runtimeVersion) }
         return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
@@ -152,11 +171,39 @@ final class SimulatorCatalog {
   }
 
   func boot(_ device: SimulatorDevice) async {
-    await transition(device, ["simctl", "boot", device.udid])
+    guard device.platform == .android else { return await transition(device, ["simctl", "boot", device.udid]) }
+    guard let avd = AndroidDiscovery.avdName(fromUDID: device.udid) else { return }
+    transitioning.insert(device.udid)
+    bootErrors[device.udid] = nil
+    defer { transitioning.remove(device.udid) }
+    do {
+      let process = try ADB.boot(avd: avd)
+      // A cold boot takes 20–90 s. Stop waiting once it's up, the emulator quits, or after 3 minutes.
+      for _ in 0..<90 {
+        try? await Task.sleep(for: .seconds(2))
+        await refresh()
+        if self.device(device.udid)?.isBooted == true { return }
+        if !process.isRunning {
+          bootErrors[device.udid] = ADB.bootFailure(avd)
+          return
+        }
+      }
+    } catch {
+      bootErrors[device.udid] = error.localizedDescription
+    }
   }
 
   func shutdown(_ device: SimulatorDevice) async {
-    await transition(device, ["simctl", "shutdown", device.udid])
+    guard device.platform == .android else { return await transition(device, ["simctl", "shutdown", device.udid]) }
+    guard device.canShutDown, let serial = device.adbSerial else { return }
+    transitioning.insert(device.udid)
+    defer { transitioning.remove(device.udid) }
+    await ADB.shutdown(serial: serial)
+    // The emulator takes a moment to drop off adb.
+    for _ in 0..<10 where self.device(device.udid)?.isBooted == true {
+      try? await Task.sleep(for: .seconds(1))
+      await refresh()
+    }
   }
 
   private func transition(_ device: SimulatorDevice, _ arguments: [String]) async {

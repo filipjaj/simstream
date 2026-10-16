@@ -25,6 +25,7 @@ Read [SECURITY.md](SECURITY.md) before sharing with control on. A link is full a
 
 - macOS 26 with Xcode 26 and an iOS 26 simulator runtime
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen), [AXe](https://github.com/cameroncooke/AXe) and [cloudflared](https://github.com/cloudflare/cloudflared): `brew install xcodegen cameroncooke/axe/axe cloudflared`
+- Optional, for Android: the Android SDK (Android Studio, or `brew install --cask android-commandlinetools`) and [scrcpy](https://github.com/Genymobile/scrcpy) (`brew install scrcpy`). Emulators and devices with USB or wireless debugging on show up next to the simulators.
 
 ## Install
 
@@ -45,7 +46,7 @@ simstream ctl control off
 simstream stop
 ```
 
-`simstream share` runs in the foreground; `--no-tunnel` serves on 127.0.0.1 only.
+`simstream share` runs in the foreground; `--no-tunnel` serves on 127.0.0.1 only. Android emulators are `avd:<name>` in `simstream list`. Sharing a real phone needs `--allow-physical`: a link to it reaches every app and account on that phone.
 
 ## iOS viewer
 
@@ -57,6 +58,8 @@ cd ios && xcodegen generate && open SimStreamViewer.xcodeproj
 ## How it works
 
 SimStream links the FBSimulatorControl frameworks that ship with AXe. Input goes over a persistent HID connection (about 1 ms per event). Frames come from the simulator's framebuffer IOSurface, get encoded with VideoToolbox, and are decoded with WebCodecs in the browser or `AVSampleBufferDisplayLayer` on iOS, with JPEG as the fallback. The server binds to 127.0.0.1, and a Cloudflare quick tunnel makes it public.
+
+Android devices go through [scrcpy](https://github.com/Genymobile/scrcpy)'s server over `adb forward`: the device encodes H.264, VideoToolbox decodes it into an IOSurface, and from there it streams exactly like a simulator. Input travels over scrcpy's control socket as real Android pointers and key events. The server must match the installed scrcpy version, which SimStream reads from the Homebrew install.
 
 The wire format is defined in three places that must change together: `mac/SimStream/Server/ViewerProtocol.swift`, `mac/SimStream/Resources/viewer.html` and `ios/SimStreamViewer/Model/ViewerProtocol.swift`.
 

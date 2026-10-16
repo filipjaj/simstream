@@ -22,6 +22,8 @@ struct TouchPoint: Equatable, Sendable, Encodable {
 
 enum HardwareButton: String, Codable, Sendable {
   case home, lock, siri
+  /// Android devices only.
+  case back, recents
 }
 
 /// Messages this app sends. Touch coordinates are normalised to 0–1 of the simulator screen.
@@ -103,6 +105,10 @@ struct ViewerState: Decodable, Equatable, Sendable {
     let width: Double
     let height: Double
     let cornerRatio: Double
+    /// "android" for Android devices; absent from Macs older than Android support.
+    var platform: String?
+
+    var isAndroid: Bool { platform == "android" }
   }
 
   struct Choice: Decodable, Equatable, Sendable, Identifiable {

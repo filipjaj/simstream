@@ -149,12 +149,17 @@ final class RemoteCatalog {
       let runtimeVersion: [Int]
       let family: String
       let booted: Bool
+      /// Absent from CLIs older than Android support.
+      let platform: SimulatorDevice.Platform?
+      let physical: Bool?
     }
     let rows = try JSONDecoder().decode([Row].self, from: data)
-    let families: [String: SimulatorDevice.Family] = ["iphone": .iPhone, "ipad": .iPad, "applewatch": .watch, "appletv": .tv, "visionpro": .vision]
+    let families: [String: SimulatorDevice.Family] = ["iphone": .iPhone, "ipad": .iPad, "applewatch": .watch, "appletv": .tv, "visionpro": .vision,
+                                                       "smartphone": .androidPhone, "rectangle.portrait": .androidTablet]
     return rows.map {
       SimulatorDevice(udid: $0.udid, name: $0.name, runtime: $0.runtime, runtimeVersion: $0.runtimeVersion,
-                      state: $0.booted ? .booted : .shutdown, family: families[$0.family] ?? .iPhone, hostID: hostID)
+                      state: $0.booted ? .booted : .shutdown, family: families[$0.family] ?? .iPhone, hostID: hostID,
+                      platform: $0.platform ?? .iOS, isPhysical: $0.physical ?? false)
     }
     .sorted { lhs, rhs in
       if lhs.isBooted != rhs.isBooted { return lhs.isBooted }

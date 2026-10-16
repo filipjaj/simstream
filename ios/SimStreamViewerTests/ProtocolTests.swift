@@ -46,6 +46,8 @@ struct MessageTests {
     #expect(try json(.text("hi")) == ["type": "text", "text": "hi"])
     #expect(try json(.key(42)) == ["type": "key", "code": 42])
     #expect(try json(.button(.home)) == ["type": "button", "name": "home"])
+    #expect(try json(.button(.back)) == ["type": "button", "name": "back"])
+    #expect(try json(.button(.recents)) == ["type": "button", "name": "recents"])
     #expect(try json(.ping(12.5)) == ["type": "ping", "t": 12.5])
   }
 
@@ -302,5 +304,18 @@ struct TouchTrackerTests {
     #expect(state.multitouch == true)
     #expect(state.lockedApp == nil)
     #expect(try JSONDecoder().decode(ServerMessage.self, from: Data(#"{"type":"denied"}"#.utf8)) == .denied)
+  }
+}
+
+struct AndroidStateTests {
+  @Test func decodesAndroidPlatform() throws {
+    let text = #"{"type":"state","device":{"udid":"avd:P","name":"Pixel 8","runtime":"Android 15","symbol":"smartphone","width":412,"height":915,"cornerRatio":0.09,"platform":"android"},"expiresAt":0,"viewers":1,"controlEnabled":true,"choices":[]}"#
+    let state = try JSONDecoder().decode(ViewerState.self, from: Data(text.utf8))
+    #expect(state.device.isAndroid)
+  }
+
+  @Test func olderMacsDecodeAsIOS() throws {
+    let text = #"{"type":"state","device":{"udid":"U","name":"n","runtime":"r","symbol":"iphone","width":1,"height":2,"cornerRatio":0},"expiresAt":0,"viewers":1,"controlEnabled":true,"choices":[]}"#
+    #expect(try !JSONDecoder().decode(ViewerState.self, from: Data(text.utf8)).device.isAndroid)
   }
 }

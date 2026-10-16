@@ -34,10 +34,10 @@ struct SimulatorSidebar: View {
       }
     }
     .listStyle(.sidebar)
-    .searchable(text: $query, placement: .sidebar, prompt: "Filter Simulators")
+    .searchable(text: $query, placement: .sidebar, prompt: "Filter Devices")
     .overlay {
       if let error = catalog.loadError {
-        ContentUnavailableView("No Simulators", systemImage: "exclamationmark.triangle", description: Text(error))
+        ContentUnavailableView("No Devices", systemImage: "exclamationmark.triangle", description: Text(error))
       } else if !query.isEmpty, filter(catalog.devices).isEmpty {
         ContentUnavailableView.search(text: query)
       } else if catalog.devices.isEmpty {
@@ -85,12 +85,14 @@ private struct SimulatorRow: View {
     .contextMenu {
       if device.isBooted {
         Button("Create Share Link") { model.createLink(for: device) }
-        if !device.isRemote {
+        if !device.isRemote, device.canShutDown {
           Divider()
           Button("Shut Down") { Task { await catalog.shutdown(device) } }
         }
-      } else {
-        Button("Boot") { Task { device.isRemote ? await remotes.boot(device) : await catalog.boot(device) } }
+      } else if device.state != .booting, !(device.isRemote && device.platform == .android) {
+        Button(device.platform == .android ? "Start" : "Boot") {
+          Task { device.isRemote ? await remotes.boot(device) : await catalog.boot(device) }
+        }
       }
     }
     .accessibilityElement(children: .combine)
@@ -98,7 +100,12 @@ private struct SimulatorRow: View {
   }
 
   private var subtitle: String {
-    device.isBooted ? device.runtime : "\(device.runtime) · Shut Down"
+    if device.isPhysical { return "\(device.runtime) · \(device.adbSerial?.contains(":") == true ? "Wi-Fi" : "USB")" }
+    switch device.state {
+    case .booted: return device.runtime
+    case .booting: return "\(device.runtime) · Starting"
+    default: return "\(device.runtime) · Shut Down"
+    }
   }
 
   @ViewBuilder private var status: some View {
@@ -107,7 +114,7 @@ private struct SimulatorRow: View {
         .foregroundStyle(.red)
         .symbolEffect(.variableColor.iterative)
         .help("Sharing now")
-    } else if catalog.transitioning.contains(device.udid) || remotes.transitioning.contains(device.id) {
+    } else if catalog.transitioning.contains(device.udid) || remotes.transitioning.contains(device.id) || device.state == .booting {
       ProgressView().controlSize(.mini)
     } else if device.isBooted {
       Circle()
