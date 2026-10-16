@@ -49,6 +49,8 @@ final class AppModel {
   let pool = LinkPool()
   let session: ShareSession
   var selection: String?
+  /// A real phone waiting for the host to confirm sharing it.
+  var physicalShareToConfirm: SimulatorDevice?
 
   private init() {
     session = ShareSession(pool: pool, catalog: catalog)
@@ -82,7 +84,12 @@ final class AppModel {
     selection.flatMap { catalog.device($0) ?? remotes.device(id: $0) }
   }
 
-  func createLink(for device: SimulatorDevice) {
+  func createLink(for device: SimulatorDevice, confirmed: Bool = false) {
+    // A real phone holds someone's accounts and messages; never share one without asking.
+    if device.isPhysical, !confirmed {
+      physicalShareToConfirm = device
+      return
+    }
     session.lockedApp = lockMemory.app(for: device.udid)
     if device.isRemote, let host = remotes.host(for: device) {
       session.startRemote(device, on: host)

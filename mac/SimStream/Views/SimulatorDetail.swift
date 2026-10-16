@@ -18,12 +18,16 @@ struct SimulatorDetail: View {
           ContentUnavailableView {
             Label(device.name, systemImage: device.family.symbol)
           } description: {
-            Text("\(device.runtime) · Shut Down")
-          } actions: {
-            if catalog.transitioning.contains(device.udid) {
-              ProgressView("Booting…").controlSize(.small)
+            if let error = catalog.bootErrors[device.udid] {
+              Text("\(device.runtime) · Shut Down\n\(error)")
             } else {
-              Button("Boot Simulator") { Task { await catalog.boot(device) } }
+              Text("\(device.runtime) · Shut Down")
+            }
+          } actions: {
+            if catalog.transitioning.contains(device.udid) || device.state == .booting {
+              ProgressView(device.platform == .android ? "Starting…" : "Booting…").controlSize(.small)
+            } else {
+              Button(device.platform == .android ? "Start Emulator" : "Boot Simulator") { Task { await catalog.boot(device) } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             }
@@ -44,7 +48,7 @@ private struct LivePreview: View {
   let device: SimulatorDevice
   @Environment(AppModel.self) private var model
   @Environment(ShareSession.self) private var session
-  @State private var link: SimulatorLink?
+  @State private var link: (any ScreenLink)?
   @State private var error: String?
 
   var body: some View {
@@ -73,15 +77,26 @@ private struct LivePreview: View {
     }
     .toolbar {
       ToolbarItemGroup {
-        Button { link?.input.send(.button(.home)) } label: { Label("Home", systemImage: "house") }
-          .help("Home")
-        Button { link?.input.send(.button(.lock)) } label: { Label("Lock", systemImage: "lock") }
-          .help("Lock")
+        if device.platform == .android {
+          Button { link?.input.send(.button(.back)) } label: { Label("Back", systemImage: "chevron.backward") }
+            .help("Back")
+          Button { link?.input.send(.button(.home)) } label: { Label("Home", systemImage: "circle") }
+            .help("Home")
+          Button { link?.input.send(.button(.recents)) } label: { Label("Recents", systemImage: "square.on.square") }
+            .help("Recent Apps")
+          Button { link?.input.send(.button(.lock)) } label: { Label("Power", systemImage: "power") }
+            .help("Power")
+        } else {
+          Button { link?.input.send(.button(.home)) } label: { Label("Home", systemImage: "house") }
+            .help("Home")
+          Button { link?.input.send(.button(.lock)) } label: { Label("Lock", systemImage: "lock") }
+            .help("Lock")
+        }
       }
     }
     .task {
       do {
-        link = try await model.pool.link(for: device.udid)
+        link = try await model.pool.link(for: device)
       } catch {
         self.error = error.localizedDescription
       }
@@ -98,7 +113,7 @@ private struct LivePreview: View {
 
 /// Shows the simulator's IOSurface directly in a layer: no copies, no encoding.
 struct SurfaceView: NSViewRepresentable {
-  let link: SimulatorLink
+  let link: any ScreenLink
 
   func makeNSView(context: Context) -> SurfaceLayerView {
     let view = SurfaceLayerView()
@@ -112,7 +127,7 @@ struct SurfaceView: NSViewRepresentable {
 }
 
 final class SurfaceLayerView: NSView {
-  var link: SimulatorLink? {
+  var link: (any ScreenLink)? {
     didSet { refresh(force: true) }
   }
 
@@ -180,7 +195,7 @@ private struct RemoteDetail: View {
       } actions: {
         if remotes.transitioning.contains(device.id) {
           ProgressView("Booting…").controlSize(.small)
-        } else if !device.isBooted {
+        } else if !device.isBooted, device.platform == .iOS {
           Button("Boot on \(hostName)") { Task { await remotes.boot(device) } }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)

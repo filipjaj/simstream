@@ -29,10 +29,12 @@ struct RemoteShareState: Decodable, Equatable, Sendable {
 /// on the remote in its own session, so it stays live when this Mac sleeps, closes or quits.
 enum RemoteShare {
   static func start(_ host: RemoteHost, udid: String, minutes: Double, quality: StreamQuality,
-                    control: Bool, switching: Bool, lockedApp: String?) async throws -> RemoteShareState {
+                    control: Bool, switching: Bool, lockedApp: String?, physical: Bool = false) async throws -> RemoteShareState {
     var arguments = ["start", "--json", "--udid", udid, "--minutes", String(Int(minutes)), "--quality", quality.cliName]
     if !control { arguments.append("--view-only") }
     if switching { arguments.append("--allow-switching") }
+    // The host picked a real phone in the app, past its warning.
+    if physical { arguments.append("--allow-physical") }
     if let lockedApp, LockedApp.isValidBundleID(lockedApp) { arguments += ["--lock-app", lockedApp] }
     let result = try await RemoteShell.run(host, cli(arguments))
     if let state = try? JSONDecoder().decode(RemoteShareState.self, from: result.output) { return state }

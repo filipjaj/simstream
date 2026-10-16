@@ -17,6 +17,16 @@ struct ContentView: View {
       ShareInspector(device: model.selectedDevice)
         .inspectorColumnWidth(min: 290, ideal: 310, max: 380)
     }
+    .confirmationDialog(
+      "Share a real phone?",
+      isPresented: Binding(get: { model.physicalShareToConfirm != nil }, set: { if !$0 { model.physicalShareToConfirm = nil } }),
+      presenting: model.physicalShareToConfirm
+    ) { device in
+      Button("Create Link") { model.createLink(for: device, confirmed: true) }
+      Button("Cancel", role: .cancel) {}
+    } message: { device in
+      Text("\(device.name) is a real device, not an emulator. Anyone with the link can see its screen\(session.allowControl ? " and use it: messages, email, accounts and settings included" : ""). Lock the share to one app or turn off control to limit this.")
+    }
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button {

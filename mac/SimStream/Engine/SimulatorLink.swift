@@ -12,9 +12,23 @@ struct ScreenGeometry: Equatable, Sendable {
   var points: CGSize { CGSize(width: Double(pixelWidth) / scale, height: Double(pixelHeight) / scale) }
 }
 
+/// A live connection to one running device: a screen surface that redraws in place, and an input driver.
+/// FramePump, the preview and the share only see this, so iOS simulators and Android devices stream alike.
+protocol ScreenLink: AnyObject, Sendable {
+  var geometry: ScreenGeometry { get }
+  var input: any InputDriver { get }
+  /// The latest frame. BGRA, IOSurface-backed.
+  var surface: IOSurface { get }
+  /// Increments whenever the screen redraws.
+  var damageSequence: UInt64 { get }
+  /// False when redraws aren't reported; consumers then poll the surface instead.
+  var reportsDamage: Bool { get }
+  func close()
+}
+
 /// A live connection to one booted simulator: its framebuffer surface and an input driver.
 /// Opening one costs ~150 ms; it is kept for as long as the simulator is previewed or shared.
-final class SimulatorLink: @unchecked Sendable { // Mutable state is guarded by `lock`.
+final class SimulatorLink: ScreenLink, @unchecked Sendable { // Mutable state is guarded by `lock`.
   enum Failure: LocalizedError {
     case notFound, noScreen
 
@@ -124,16 +138,25 @@ private enum SimulatorControl {
   }
 }
 
-/// Keeps one link per simulator so the preview and a share reuse the same connection.
+/// Keeps one link per device so the preview and a share reuse the same connection.
 @MainActor
 final class LinkPool {
-  private var links: [String: SimulatorLink] = [:]
-  private var pending: [String: Task<SimulatorLink, Error>] = [:]
+  private var links: [String: any ScreenLink] = [:]
+  private var pending: [String: Task<any ScreenLink, Error>] = [:]
 
-  func link(for udid: String) async throws -> SimulatorLink {
+  func link(for device: SimulatorDevice) async throws -> any ScreenLink {
+    let udid = device.udid
     if let link = links[udid] { return link }
     if let task = pending[udid] { return try await task.value }
-    let task = Task.detached { try await SimulatorLink.connect(udid: udid) }
+    let task = Task.detached { () async throws -> any ScreenLink in
+      switch device.platform {
+      case .iOS:
+        return try await SimulatorLink.connect(udid: udid)
+      case .android:
+        guard let serial = device.adbSerial else { throw AndroidLink.Failure.notRunning }
+        return try await AndroidLink.connect(serial: serial)
+      }
+    }
     pending[udid] = task
     defer { pending[udid] = nil }
     let link = try await task.value
@@ -141,14 +164,19 @@ final class LinkPool {
     return link
   }
 
-  func existing(_ udid: String) -> SimulatorLink? { links[udid] }
+  func existing(_ udid: String) -> (any ScreenLink)? { links[udid] }
 
-  /// Drops links for simulators that are no longer booted.
+  /// Drops links for devices that are no longer running.
   func prune(keeping booted: Set<String>) {
     for (udid, link) in links where !booted.contains(udid) {
       link.close()
       links[udid] = nil
     }
+  }
+
+  /// Drops one link whose connection died, so the next request opens a fresh one.
+  func discard(_ udid: String) {
+    links.removeValue(forKey: udid)?.close()
   }
 
   func closeAll() {

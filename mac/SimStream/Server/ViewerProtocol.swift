@@ -83,6 +83,8 @@ struct ViewerState: Encodable, Equatable, Sendable {
     let width: Double
     let height: Double
     let cornerRatio: Double
+    /// "ios" or "android": which hardware buttons the viewer offers.
+    let platform: SimulatorDevice.Platform
   }
 
   struct Choice: Encodable, Equatable, Sendable {

@@ -4,15 +4,19 @@ import Observation
 /// Routes viewer input to the current simulator without hopping through the main actor.
 private final class InputRouter: @unchecked Sendable { // State is guarded by `lock`.
   private let lock = NSLock()
-  private var link: SimulatorLink?
+  private var link: (any ScreenLink)?
   private var enabled = true
   /// Set while the share is locked to one app.
   private var edges: EdgeGuard?
+  /// Android's back gesture starts on the side edges, so locked Android shares guard those too.
+  private var guardsSides = false
 
-  func configure(link: SimulatorLink?, enabled: Bool) {
+  func configure(link: (any ScreenLink)?, enabled: Bool, guardsSides: Bool = false) {
     lock.withLock {
       self.link = link
       self.enabled = enabled
+      self.guardsSides = guardsSides
+      if edges != nil { edges = EdgeGuard(guardsSides: guardsSides) }
     }
   }
 
@@ -25,16 +29,16 @@ private final class InputRouter: @unchecked Sendable { // State is guarded by `l
   /// half-seen edge gesture, so none of it reaches the simulator afterwards.
   func discardPending() {
     let target = lock.withLock {
-      if edges != nil { edges = EdgeGuard() }
+      if edges != nil { edges = EdgeGuard(guardsSides: guardsSides) }
       return link
     }
     target?.input.discardPending()
   }
 
-  func setLocked(_ locked: Bool) { lock.withLock { edges = locked ? EdgeGuard() : nil } }
+  func setLocked(_ locked: Bool) { lock.withLock { edges = locked ? EdgeGuard(guardsSides: guardsSides) : nil } }
 
   func route(_ event: InputEvent) {
-    let (target, events): (SimulatorLink?, [InputEvent]) = lock.withLock {
+    let (target, events): ((any ScreenLink)?, [InputEvent]) = lock.withLock {
       // Lifts still go through with control off: the server sends one to release a held finger.
       guard enabled || event.isLift, let link else { return (nil, []) }
       return (link, edges?.filter(event) ?? [event])
@@ -190,10 +194,10 @@ final class ShareSession {
   func switchTo(_ next: SimulatorDevice) async {
     guard isActive, next.isBooted, next.udid != device?.udid else { return }
     do {
-      let link = try await pool.link(for: next.udid)
+      let link = try await pool.link(for: next)
       device = next
       inputTransport = link.input.name
-      router.configure(link: link, enabled: allowControl)
+      router.configure(link: link, enabled: allowControl, guardsSides: next.platform == .android)
       pump.start(link: link, quality: quality)
       publishState()
     } catch {
@@ -204,14 +208,14 @@ final class ShareSession {
   // MARK: - Lifecycle
 
   private func run(_ device: SimulatorDevice) async throws {
-    let link = try await pool.link(for: device.udid)
+    let link = try await pool.link(for: device)
     try Task.checkCancellation()
     inputTransport = link.input.name
 
     let token = Self.makeToken()
     let server = StreamServer(token: token, page: Self.viewerPage)
     self.server = server
-    router.configure(link: link, enabled: allowControl)
+    router.configure(link: link, enabled: allowControl, guardsSides: device.platform == .android)
     router.setLocked(lockedApp != nil)
     startLockWatch()
     server.onMessage = { [weak self, router] message in
@@ -344,8 +348,8 @@ final class ShareSession {
     guard lockedApp != nil, remoteHost == nil, server != nil else { return }
     lockWatch = Task { [weak self] in
       while !Task.isCancelled {
-        if let self, let app = lockedApp, allowControl, let udid = device?.udid {
-          await InstalledApps.bringToFront(app.bundleID, udid: udid)
+        if let self, let app = lockedApp, allowControl, let device {
+          await InstalledApps.bringToFront(app.bundleID, device: device)
         }
         try? await Task.sleep(for: .seconds(1))
       }
@@ -353,7 +357,7 @@ final class ShareSession {
   }
 
   private func viewerSelected(_ udid: String) {
-    guard allowSwitching, let next = catalog.device(udid) else { return }
+    guard allowSwitching, let next = catalog.device(udid), !next.isPhysical else { return }
     Task { await switchTo(next) }
   }
 
@@ -363,11 +367,12 @@ final class ShareSession {
     guard let server, let device, let link = pool.existing(device.udid) else { return }
     let points = link.geometry.points
     let choices = allowSwitching
-      ? catalog.booted.map { ViewerState.Choice(udid: $0.udid, name: $0.name, runtime: $0.runtime, symbol: $0.family.symbol) }
+      // A real phone is only ever shared on purpose by the host, never reached by switching.
+      ? catalog.booted.filter { !$0.isPhysical }.map { ViewerState.Choice(udid: $0.udid, name: $0.name, runtime: $0.runtime, symbol: $0.family.symbol) }
       : []
     let state = ViewerState(
       device: .init(udid: device.udid, name: device.name, runtime: device.runtime, symbol: device.family.symbol,
-                    width: points.width, height: points.height, cornerRatio: device.cornerRatio),
+                    width: points.width, height: points.height, cornerRatio: device.cornerRatio, platform: device.platform),
       expiresAt: (expiresAt ?? Date().addingTimeInterval(options.lifetime)).timeIntervalSince1970 * 1000,
       viewers: viewers,
       controlEnabled: allowControl,
@@ -412,7 +417,7 @@ extension ShareSession {
     startTask = Task { [weak self] in
       do {
         try await RemoteShell.sync(host)
-        let state = try await RemoteShare.start(host, udid: device.udid, minutes: minutes, quality: quality, control: control, switching: switching, lockedApp: locked)
+        let state = try await RemoteShare.start(host, udid: device.udid, minutes: minutes, quality: quality, control: control, switching: switching, lockedApp: locked, physical: device.isPhysical)
         guard let self, !Task.isCancelled else { return }
         if state.phase == .live {
           adopt(state, device: device, host: host)

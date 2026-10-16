@@ -7,9 +7,10 @@ struct LockedApp: Codable, Hashable, Sendable, Identifiable {
 
   var id: String { bundleID }
 
-  /// Bundle IDs travel inside SSH command lines, so only these characters are accepted.
+  /// Bundle IDs (and Android package names) travel inside SSH and adb shell command lines, so only
+  /// these characters are accepted.
   static func isValidBundleID(_ value: String) -> Bool {
-    !value.isEmpty && value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }
+    !value.isEmpty && value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_") }
   }
 }
 
@@ -35,8 +36,26 @@ final class LockMemory {
   }
 }
 
-/// User-installed apps on a simulator, from `simctl listapps`.
+/// User-installed apps on a simulator (`simctl listapps`) or Android device (`pm list packages -3`).
 enum InstalledApps {
+  static func list(device: SimulatorDevice) async -> [LockedApp] {
+    guard device.platform == .android else { return await list(udid: device.udid) }
+    guard let serial = device.adbSerial, let output = try? await ADB.shell("pm list packages -3", serial: serial) else { return [] }
+    return parsePackages(output)
+  }
+
+  /// `pm list packages` prints "package:<name>" lines. Android has no cheap way to read app labels
+  /// in bulk, so the package name doubles as the display name.
+  static func parsePackages(_ output: String) -> [LockedApp] {
+    output.split(whereSeparator: \.isNewline)
+      .compactMap { line -> LockedApp? in
+        guard line.hasPrefix("package:") else { return nil }
+        let name = line.dropFirst(8).trimmingCharacters(in: .whitespaces)
+        return LockedApp.isValidBundleID(name) ? LockedApp(bundleID: name, name: name) : nil
+      }
+      .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
   static func list(udid: String) async -> [LockedApp] {
     guard let result = try? await ProcessRunner.run(Tools.xcrun, ["simctl", "listapps", udid]), result.status == 0 else { return [] }
     return parse(result.output)
@@ -59,6 +78,17 @@ enum InstalledApps {
   static func bringToFront(_ bundleID: String, udid: String) async -> Bool {
     (try? await ProcessRunner.run(Tools.xcrun, ["simctl", "launch", udid, bundleID]))?.status == 0
   }
+
+  @discardableResult
+  static func bringToFront(_ bundleID: String, device: SimulatorDevice) async -> Bool {
+    guard device.platform == .android else { return await bringToFront(bundleID, udid: device.udid) }
+    guard let serial = device.adbSerial, LockedApp.isValidBundleID(bundleID) else { return false }
+    // Starting the launcher activity with NEW_TASK resumes the app's existing task, so a running
+    // app keeps its state; when it's already in front, am only prints a warning.
+    let script = "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n "
+      + "$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER \(bundleID) | tail -n 1)"
+    return (try? await ADB.shell(script, serial: serial)) != nil
+  }
 }
 
 /// Keeps a viewer inside the locked app by dropping the input that opens system UI: hardware
@@ -74,6 +104,15 @@ struct EdgeGuard: Equatable, Sendable {
   static let bottomBand = 0.05
   /// How far a finger that started on an edge may move and still count as a tap.
   static let slop = 0.015
+  /// Fraction of the screen width on each side where Android's back gesture starts.
+  static let sideBand = 0.04
+
+  /// Also guards the left and right edges (Android's back gesture).
+  var guardsSides = false
+
+  init(guardsSides: Bool = false) {
+    self.guardsSides = guardsSides
+  }
 
   private enum Gesture: Equatable, Sendable {
     case none
@@ -85,6 +124,10 @@ struct EdgeGuard: Equatable, Sendable {
   private var gesture = Gesture.none
 
   static func onEdge(_ y: Double) -> Bool { y < topBand || y > 1 - bottomBand }
+
+  private func onEdge(x: Double, y: Double) -> Bool {
+    Self.onEdge(y) || (guardsSides && (x < Self.sideBand || x > 1 - Self.sideBand))
+  }
 
   /// The events to forward in place of `event`.
   mutating func filter(_ event: InputEvent) -> [InputEvent] {
@@ -98,7 +141,7 @@ struct EdgeGuard: Equatable, Sendable {
     case .twoFingers(let phase, let a, let b):
       switch (phase, gesture) {
       case (.down, .none):
-        if Self.onEdge(a.y) || Self.onEdge(b.y) { gesture = .blocked; return [] }
+        if onEdge(x: a.x, y: a.y) || onEdge(x: b.x, y: b.y) { gesture = .blocked; return [] }
         return [event]
       case (.up, .blocked):
         gesture = .none
@@ -114,7 +157,7 @@ struct EdgeGuard: Equatable, Sendable {
   private mutating func touch(_ phase: TouchPhase, x: Double, y: Double, event: InputEvent) -> [InputEvent] {
     switch (phase, gesture) {
     case (.down, .none):
-      guard Self.onEdge(y) else { return [event] }
+      guard onEdge(x: x, y: y) else { return [event] }
       gesture = .held(x: x, y: y)
       return []
     case (.down, _), (.move, .held):

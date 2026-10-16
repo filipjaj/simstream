@@ -231,4 +231,10 @@ extension ViewerState {
                    width: 402, height: 874, cornerRatio: 0.14),
     expiresAt: (Date.now.timeIntervalSince1970 + 1_380) * 1000,
     viewers: 2, controlEnabled: true, choices: [])
+
+  static let androidPreview = ViewerState(
+    device: Device(udid: "avd:Pixel_8", name: "Pixel 8", runtime: "Android 15", symbol: "smartphone",
+                   width: 412, height: 915, cornerRatio: 0.09, platform: "android"),
+    expiresAt: (Date.now.timeIntervalSince1970 + 1_380) * 1000,
+    viewers: 1, controlEnabled: true, choices: [])
 }

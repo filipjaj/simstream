@@ -61,6 +61,10 @@
   #lockPill { display: none; }
   body.locked #lockPill { display: inline-flex; }
   body.locked .toolbar [data-button] { display: none; }
+  /* Android has Back and Recents; iOS doesn't. */
+  .toolbar .android { display: none; }
+  body.android .toolbar .android:not([hidden]) { display: flex; }
+  body.locked.android .toolbar .android { display: none; }
 
   /* Screen */
   #stage { position: relative; min-height: 0; display: grid; place-items: center; padding: 8px 16px; }
@@ -147,6 +151,11 @@
   <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14.5 4.5h5v5M9.5 19.5h-5v-5M19.5 4.5l-6 6M4.5 19.5l6-6"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-android" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2"/><path d="M11 19h2"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5v8M7.2 6.5a7 7 0 1 0 9.6 0"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></symbol>
+  <symbol id="i-recents" viewBox="0 0 24 24"><rect x="5.5" y="5.5" width="13" height="13" rx="2"/></symbol>
   <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M3 3l18 18M8.5 16a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4-2.3M19 12.5a10 10 0 0 0-3.3-2M2 9a15 15 0 0 1 4.5-2.8M22 9A15 15 0 0 0 11 5.1"/><circle cx="12" cy="19.5" r=".5"/></symbol>
 </svg>
 
@@ -180,8 +189,10 @@
     <button id="controlAction"></button>
   </div>
   <div class="toolbar" role="toolbar" aria-label="Simulator controls">
-    <button data-button="home" title="Home (⌘⇧H)" aria-label="Home"><svg><use href="#i-home"/></svg><span class="label">Home</span></button>
-    <button data-button="lock" title="Lock" aria-label="Lock"><svg><use href="#i-lock"/></svg><span class="label">Lock</span></button>
+    <button data-button="back" class="android" title="Back (Esc)" aria-label="Back"><svg><use href="#i-back"/></svg><span class="label">Back</span></button>
+    <button data-button="home" title="Home (⌘⇧H)" aria-label="Home"><svg><use href="#i-home" id="homeGlyph"/></svg><span class="label">Home</span></button>
+    <button data-button="recents" class="android" title="Recent apps" aria-label="Recent apps"><svg><use href="#i-recents"/></svg><span class="label">Recents</span></button>
+    <button data-button="lock" title="Lock" aria-label="Lock" id="lockButton"><svg><use href="#i-lock" id="lockGlyph"/></svg><span class="label" id="lockLabel">Lock</span></button>
     <button id="keyboardButton" title="Keyboard" aria-label="Keyboard" aria-pressed="false"><svg><use href="#i-keyboard"/></svg><span class="label">Keyboard</span></button>
     <span class="sep"></span>
     <button id="screenshot" title="Save screenshot" aria-label="Save screenshot"><svg><use href="#i-camera"/></svg></button>
@@ -242,12 +253,20 @@ function layout() {
 new ResizeObserver(layout).observe($("stage"));
 
 // ---------- State ----------
+const glyph = (symbol) => symbol === "ipad" ? "ipad" : (symbol === "smartphone" || symbol === "rectangle.portrait") ? "android" : "iphone";
+
 function applyState(next) {
   const switched = state && state.device.udid !== next.device.udid;
   state = next;
+  const android = next.device.platform === "android";
+  document.body.classList.toggle("android", android);
+  $("homeGlyph").setAttribute("href", android ? "#i-circle" : "#i-home");
+  $("lockGlyph").setAttribute("href", android ? "#i-power" : "#i-lock");
+  $("lockLabel").textContent = android ? "Power" : "Lock";
+  $("lockButton").title = $("lockButton").ariaLabel = android ? "Power" : "Lock";
   $("deviceName").textContent = next.device.name;
   $("deviceRuntime").textContent = next.device.runtime;
-  $("deviceGlyph").setAttribute("href", next.device.symbol === "ipad" ? "#i-ipad" : "#i-iphone");
+  $("deviceGlyph").setAttribute("href", `#i-${glyph(next.device.symbol)}`);
   document.title = `${next.device.name} · Live`;
   $("viewerCount").textContent = next.viewers;
   $("viewers").title = next.viewers === 1 ? "1 person watching" : `${next.viewers} people watching`;
@@ -265,7 +284,7 @@ function applyState(next) {
     const item = document.createElement("button");
     item.setAttribute("role", "menuitemradio");
     item.setAttribute("aria-current", String(c.udid === next.device.udid));
-    item.innerHTML = `<svg><use href="#i-${c.symbol === "ipad" ? "ipad" : "iphone"}"/></svg><span><div></div><div class="sub"></div></span><svg class="check"><use href="#i-check"/></svg>`;
+    item.innerHTML = `<svg><use href="#i-${glyph(c.symbol)}"/></svg><span><div></div><div class="sub"></div></span><svg class="check"><use href="#i-check"/></svg>`;
     item.querySelector("div").textContent = c.name;
     item.querySelector(".sub").textContent = c.runtime;
     item.addEventListener("click", () => { $("picker").hidePopover(); if (c.udid !== next.device.udid) send({ type: "select", udid: c.udid }); });

@@ -3,18 +3,19 @@ import Foundation
 
 // simstream — headless SimStream for Macs you reach over SSH (e.g. the Mac mini).
 //
-//   simstream list [--json]                       simulators on this Mac
+//   simstream list [--json]                       simulators, emulators and Android devices on this Mac
 //   simstream start [share options] [--json]      share in the background; survives logout and SSH
 //                                                 disconnects; prints the link once it's live
 //   simstream status [--json]                     the background share, if any
 //   simstream ctl <command>                       extend · pass · control on|off · switching on|off ·
 //                                                 quality data-saver|balanced|sharp · lock <bundle-id>|off
-//   simstream apps --udid <udid> [--json]         user apps on a simulator, for --lock-app
+//   simstream apps --udid <udid> [--json]         user apps on a simulator or Android device, for --lock-app
 //   simstream stop                                end the background share
 //   simstream share [share options]               share in the foreground; Ctrl-C stops
 //
 // Share options: --udid <udid> | --name <name>, --minutes 15, --quality balanced, --port <n>,
-// --no-tunnel, --view-only, --allow-switching, --lock-app <bundle-id> (keep viewers inside one app).
+// --no-tunnel, --view-only, --allow-switching, --lock-app <bundle-id> (keep viewers inside one app),
+// --allow-physical (required to share a real Android phone: viewers get everything on it).
 //
 // A background share keeps its state in ~/.local/state/simstream/share.json and reads commands
 // from the FIFO ~/.local/state/simstream/control, which is what `status` and `ctl` use.
@@ -31,7 +32,7 @@ struct Flags {
     while let argument = iterator.next() {
       guard argument.hasPrefix("--") else { positional.append(argument); continue }
       let name = String(argument.dropFirst(2))
-      if ["no-tunnel", "view-only", "allow-switching", "json"].contains(name) {
+      if ["no-tunnel", "view-only", "allow-switching", "allow-physical", "json"].contains(name) {
         switches.insert(name)
       } else if let value = iterator.next() {
         values[name] = value
@@ -75,6 +76,8 @@ struct DeviceRow: Encodable {
   let runtimeVersion: [Int]
   let family: String
   let booted: Bool
+  let platform: SimulatorDevice.Platform
+  let physical: Bool
 }
 
 enum Paths {
@@ -170,16 +173,20 @@ func run() async -> Int32 {
     await catalog.refresh()
     if json {
       print(encode(catalog.devices.map {
-        DeviceRow(udid: $0.udid, name: $0.name, runtime: $0.runtime, runtimeVersion: $0.runtimeVersion, family: $0.family.symbol, booted: $0.isBooted)
+        DeviceRow(udid: $0.udid, name: $0.name, runtime: $0.runtime, runtimeVersion: $0.runtimeVersion, family: $0.family.symbol,
+                  booted: $0.isBooted, platform: $0.platform, physical: $0.isPhysical)
       }))
     } else {
-      for device in catalog.booted { print("\(device.udid)  \(device.name)  \(device.runtime)") }
+      for device in catalog.booted { print("\(device.udid)  \(device.name)  \(device.runtime)\(device.isPhysical ? "  (physical)" : "")") }
     }
     return 0
 
   case "apps":
     guard let udid = flags.values["udid"] else { return fail("usage: simstream apps --udid <udid>") }
-    let apps = await InstalledApps.list(udid: udid)
+    let catalog = SimulatorCatalog()
+    await catalog.refresh()
+    let apps: [LockedApp]
+    if let device = catalog.device(udid) { apps = await InstalledApps.list(device: device) } else { apps = await InstalledApps.list(udid: udid) }
     if json { print(encode(apps)) } else { apps.forEach { print("\($0.bundleID)  \($0.name)") } }
     return 0
 
@@ -273,10 +280,10 @@ func warnAboutControl() {
   FileHandle.standardError.write(Data("Note: viewers with control can use Safari in the simulator to reach this Mac's localhost and network. Use --view-only or `simstream ctl control off` to prevent that.\n".utf8))
 }
 
-/// The installed app with this bundle ID, if it's a user app on that simulator.
-func installedApp(_ bundleID: String, udid: String) async -> LockedApp? {
+/// The installed app with this bundle ID, if it's a user app on that device.
+func installedApp(_ bundleID: String, device: SimulatorDevice) async -> LockedApp? {
   guard LockedApp.isValidBundleID(bundleID) else { return nil }
-  return await InstalledApps.list(udid: udid).first { $0.bundleID == bundleID }
+  return await InstalledApps.list(device: device).first { $0.bundleID == bundleID }
 }
 
 /// Runs a share in this process. With `--state` it also publishes share.json and reads the control FIFO.
@@ -296,11 +303,17 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
   } else if let name = flags.values["name"] {
     device = catalog.booted.first { $0.name == name } ?? catalog.booted.first { $0.name.localizedCaseInsensitiveContains(name) }
   } else {
-    device = catalog.booted.first
+    device = catalog.booted.first { !$0.isPhysical }
   }
   guard let device, device.isBooted else {
     state.phase = .failed
     state.message = device.map { "\($0.name) isn't booted." } ?? "No matching booted simulator."
+    publish()
+    return fail(state.message ?? "")
+  }
+  guard !device.isPhysical || flags.switches.contains("allow-physical") else {
+    state.phase = .failed
+    state.message = "\(device.name) is a real phone: viewers could reach everything on it. Pass --allow-physical to share it anyway."
     publish()
     return fail(state.message ?? "")
   }
@@ -313,7 +326,7 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
   session.allowSwitching = flags.switches.contains("allow-switching")
   session.quality = quality(named: flags.values["quality"]) ?? .balanced
   if let bundleID = flags.values["lock-app"] {
-    guard let app = await installedApp(bundleID, udid: device.udid) else {
+    guard let app = await installedApp(bundleID, device: device) else {
       state.phase = .failed
       state.message = "\(bundleID) isn't installed on \(device.name)."
       publish()
@@ -345,7 +358,7 @@ func share(flags: Flags, stateDirectory: Bool) async -> Int32 {
     case ("lock", "off"?): session.lockedApp = nil
     case ("lock", let bundleID?):
       Task { @MainActor in
-        if let app = await installedApp(bundleID, udid: session.device?.udid ?? device.udid) { session.lockedApp = app }
+        if let app = await installedApp(bundleID, device: session.device ?? device) { session.lockedApp = app }
       }
     default: break
     }

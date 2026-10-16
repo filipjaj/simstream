@@ -9,6 +9,8 @@ enum TouchPhase: String, Codable, Sendable {
 
 enum HardwareButton: String, Codable, Sendable {
   case home, lock, siri
+  /// Android only; iOS drivers ignore them.
+  case back, recents
 }
 
 /// Viewer input. Touch coordinates are normalised to 0–1 of the screen.
@@ -122,7 +124,8 @@ final class HIDInputDriver: InputDriver {
       case .key(let code):
         try await FBSimulatorHIDEvent.shortKeyPress(code).sendAsync(on: hid)
       case .button(let button):
-        try await FBSimulatorHIDEvent.shortButtonPress(button.hidButton).sendAsync(on: hid)
+        guard let hidButton = button.hidButton else { return }
+        try await FBSimulatorHIDEvent.shortButtonPress(hidButton).sendAsync(on: hid)
       case .text(let text):
         for segment in Keymap.segments(for: text) {
           guard isCurrent() else { return }
@@ -188,7 +191,7 @@ final class AXeCLIInputDriver: InputDriver {
         }
       case .text(let text): args = ["type", text]
       case .key(let code): args = ["key", String(code)]
-      case .button(let button): args = ["button", button.rawValue]
+      case .button(let button): args = button.hidButton == nil ? nil : ["button", button.rawValue]
       }
       if let args { _ = try? await ProcessRunner.run(axe, args + ["--udid", udid]) }
     }
@@ -209,11 +212,12 @@ private final class PendingTouch: @unchecked Sendable {
 private func clamp(_ value: Double) -> Double { min(max(value, 0), 1) }
 
 private extension HardwareButton {
-  var hidButton: FBSimulatorHIDButton {
+  var hidButton: FBSimulatorHIDButton? {
     switch self {
     case .home: .homeButton
     case .lock: .lock
     case .siri: .siri
+    case .back, .recents: nil
     }
   }
 }

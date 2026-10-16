@@ -87,9 +87,11 @@ final class FramePump: @unchecked Sendable { // All mutable state is confined to
   private let context = CIContext(options: [.cacheIntermediates: false, .name: "SimStream"])
   private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
   private var timer: DispatchSourceTimer?
-  private var link: SimulatorLink?
+  private var link: (any ScreenLink)?
   private var quality = StreamQuality.balanced
   private var encoder: H264Encoder?
+  /// The screen size the encoder was built for. Android devices can change it mid-stream.
+  private var encoderGeometry: ScreenGeometry?
   private var tickCount = 0
   private var lastSequence: UInt64 = .max
   private var lastChange: UInt64 = 0
@@ -108,7 +110,7 @@ final class FramePump: @unchecked Sendable { // All mutable state is confined to
   /// The most recent JPEG, so a viewer who joins on a still screen sees something at once.
   var latestJPEG: Data? { queue.sync { lastJPEG } }
 
-  func start(link: SimulatorLink, quality: StreamQuality) {
+  func start(link: any ScreenLink, quality: StreamQuality) {
     queue.async { [self] in
       self.link = link
       self.quality = quality
@@ -193,7 +195,9 @@ final class FramePump: @unchecked Sendable { // All mutable state is confined to
   }
 
   private func ensureEncoder(_ geometry: ScreenGeometry) -> H264Encoder? {
-    if let encoder { return encoder }
+    if let encoder, encoderGeometry == geometry { return encoder }
+    encoder?.invalidate()
+    encoder = nil
     let size = outputSize(geometry)
     do {
       let encoder = try H264Encoder(width: size.width, height: size.height, bitrate: quality.h264Bitrate,
@@ -207,6 +211,7 @@ final class FramePump: @unchecked Sendable { // All mutable state is confined to
         onH264?(frame, config)
       }
       self.encoder = encoder
+      encoderGeometry = geometry
       return encoder
     } catch {
       NSLog("SimStream: H.264 encoder unavailable: \(error)")
@@ -214,7 +219,7 @@ final class FramePump: @unchecked Sendable { // All mutable state is confined to
     }
   }
 
-  private func encodeJPEG(link: SimulatorLink, now: UInt64) {
+  private func encodeJPEG(link: any ScreenLink, now: UInt64) {
     let sequence = link.damageSequence
     let stale = now &- lastJPEGEncode > 1_000_000_000
     if link.reportsDamage, sequence == lastJPEGSequence, !stale, lastJPEG != nil { return }

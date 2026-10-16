@@ -28,7 +28,7 @@ struct ShareInspector: View {
 
       Section {
         Toggle("Viewers can control", isOn: $session.allowControl)
-        Toggle("Viewers can switch simulators", isOn: $session.allowSwitching)
+        Toggle("Viewers can switch devices", isOn: $session.allowSwitching)
         AppLockPicker(device: session.isActive ? session.device : device)
         Picker("Quality", selection: $session.quality) {
           ForEach(StreamQuality.allCases) { Text($0.title).tag($0) }
@@ -49,6 +49,10 @@ struct ShareInspector: View {
         if session.allowControl && session.options.tunnel {
           if let app = session.lockedApp {
             Text("Viewers stay in \(app.name): Home, Lock and system gestures are off, and SimStream reopens \(app.name) if something else comes to the front. Web views inside the app can still reach your Mac's localhost and local network.")
+          } else if shared?.isPhysical == true {
+            Text("Viewers can use every app on this phone. Lock the share to one app to keep them out of the rest.")
+          } else if shared?.platform == .android {
+            Text("Anyone with the link can use a browser in this emulator to reach your Mac through 10.0.2.2.")
           } else {
             Text("Anyone with the link can use Safari in this simulator to reach your Mac's localhost and local network.")
           }
@@ -58,6 +62,8 @@ struct ShareInspector: View {
     .formStyle(.grouped)
     .animation(.default, value: session.phase)
   }
+
+  private var shared: SimulatorDevice? { session.isActive ? session.device : device }
 }
 
 private struct NewShareSections: View {
@@ -73,7 +79,7 @@ private struct NewShareSections: View {
           .foregroundStyle(.tint)
         Text(title)
           .font(.headline)
-        Text("Anyone with the link can watch and control this simulator in a browser, until the link expires.")
+        Text(description)
           .font(.callout)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -102,6 +108,13 @@ private struct NewShareSections: View {
     }
   }
 
+  private var description: String {
+    if device?.isPhysical == true {
+      return "This is a real phone. Anyone with the link can watch and control it in a browser, including its apps and accounts, until the link expires."
+    }
+    return "Anyone with the link can watch and control this \(device?.platform == .android ? "emulator" : "simulator") in a browser, until the link expires."
+  }
+
   private var title: String {
     guard let device else { return "Share a Simulator" }
     return "Share \(device.name)"
@@ -109,7 +122,7 @@ private struct NewShareSections: View {
 
   private var buttonTitle: String {
     if device?.isBooted != true { return "Boot to Share" }
-    if session.isActive { return "Move Link to This Simulator" }
+    if session.isActive { return device?.platform == .android ? "Move Link to This Device" : "Move Link to This Simulator" }
     return "Create Link"
   }
 }
@@ -294,7 +307,7 @@ private struct AppLockPicker: View {
     if device.isRemote, let host = model.remotes.host(for: device) {
       apps = await RemoteShare.apps(host, udid: device.udid)
     } else {
-      apps = await InstalledApps.list(udid: device.udid)
+      apps = await InstalledApps.list(device: device)
     }
   }
 }
